@@ -19,14 +19,16 @@ run = Run(experiment="declipper")
 # Log run parameters
 run["hparams"] = {
     "learning_rate": 0.001,
-    "batch_size": 4,
-    "num_epochs": 20, 
+    "batch_size": 5,
+    "num_epochs": 100, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/Elements08/Music/ml/uncomp/wav/",
     "compressed_data_path": "/mnt/Elements08/Music/ml/comp/small/",
     "test_compressed_data_path": "/mnt/Elements08/Music/ml/comp/test/",
     "max_w": 14000000,
-    "num_workers": 0
+    "num_workers": 0,
+    "prefetch_factor": None,
+    "pin_memory": False
 }
 
 # Save run parameters to variables for easier access
@@ -34,6 +36,8 @@ max_w = run["hparams", "max_w"]
 uncomp_data_path = run["hparams", "uncompressed_data_path"]
 sample_rate = run["hparams", "expected_sample_rate"]
 num_workers = run["hparams", "num_workers"]
+prefetch_factor = run["hparams", "prefetch_factor"]
+pin_memory = run["hparams", "pin_memory"]
 
 # Get CPU, GPU, or MPS device for training
 device = (
@@ -82,8 +86,8 @@ test_data = AudioDataset(inputs, labels, device)
 print(f"Added {len(test_data)} file pairs to test data")
 
 # Create data loaders
-trainloader = DataLoader(training_data, batch_size=run["hparams", "batch_size"], shuffle=False, num_workers=num_workers)
-testloader = DataLoader(test_data, batch_size=run["hparams", "batch_size"], shuffle=False, num_workers=num_workers)
+trainloader = DataLoader(training_data, batch_size=run["hparams", "batch_size"], shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+testloader = DataLoader(test_data, batch_size=run["hparams", "batch_size"], shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
 
 # Initialize model, loss function, and optimizer
 print("\nInitializing model, loss function, and optimizer...")
@@ -106,13 +110,15 @@ for epoch in range(run["hparams", "num_epochs"]):
         # Upsample output to match uncompressed wav
         output = upsample_tensor(output, orig_train_shape)
         # Compute the loss value: this measures how well the predicted outputs match the true labels
-        loss = criterion(output, uncomp_wav)
+        real_loss = criterion(output.real, uncomp_wav.real)
+        imag_loss = criterion(output.imag, uncomp_wav.imag)
+        loss = (real_loss+imag_loss)/2
         # Backward pass: compute the gradient of the loss with respect to model parameters
         loss.backward()
         # Update the model's parameters using the optimizer's step method
         optimizer.step()
 
-        # Log loss and accuracy to aim
+        # Log loss to aim
         run.track(loss, name='loss', step=10, epoch=epoch+1, context={ "subset":"train" })
 
         # Update tqdm progress bar with fixed number of decimals for loss and accuracy
@@ -126,7 +132,14 @@ for epoch in range(run["hparams", "num_epochs"]):
         for i, (comp_wav, uncomp_wav) in pbar:
             output = model(comp_wav)
             output = upsample_tensor(output, [uncomp_wav.shape[2], uncomp_wav.shape[3]])
-            loss = criterion(output, uncomp_wav)
+
+            real_loss = criterion(output.real, uncomp_wav.real)
+            imag_loss = criterion(output.imag, uncomp_wav.imag)
+            loss = (real_loss+imag_loss)/2
+
+            # Log loss to aim
+            run.track(loss, name='loss', step=10, epoch=epoch+1, context={ "subset":"test" })
+
             pbar.set_postfix({"Loss": f"{loss.item():.4f}"})
 
 print("Finished Training")
