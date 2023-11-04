@@ -47,5 +47,9 @@ with torch.no_grad():
     for input in inputs:
         output = model(input)
         #output = input
-        spec_to_wav(output, sample_rate, device)
+        # Set the desired output path and filename
+        output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
+        filename = "output_audio.wav"
+
+        spec_to_wav(output, output_path+filename)
 
