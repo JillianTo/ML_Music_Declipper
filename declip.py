@@ -1,5 +1,6 @@
 import os
-from autoencoder import AutoEncoder, transform_tensor, spec_to_wav, pad_tensor
+from autoencoder import AutoEncoder, AutoEncoder2L
+from functional import Functional
 
 import torch
 import torch.nn as nn
@@ -10,7 +11,8 @@ import torchaudio.transforms as T
 
 # Hyperparameters
 path = "/mnt/Elements08/Music/ml/test/"
-weights_path = "./model.pth"
+weights_path = "/home/jto/Documents/AIDeclip/results/model00.pth"
+output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
 sample_rate = 44100
 
 # Get CPU, GPU, or MPS device for inference
@@ -21,35 +23,35 @@ device = (
         if torch.backends.mps.is_available()
         else "cpu"
 )
+device = "cpu"
 print(f"Using {device} device")
 
 # Get files to declip
 inputs = []
 for filename in os.listdir(path):
-    wav, wav_sample_rate = torchaudio.load(path+filename, normalize=True)
+    wav, _ = torchaudio.load(path+filename, normalize=True)
 
     # TODO: Resample if not expected sample rate
 
     # Transform wav to spectrogram
-    #wav = pad_tensor(wav, 14000000)
-    wav = transform_tensor(wav, sample_rate)
+    funct = Functional(sample_rate, None)
+    wav = funct.transform(wav)
 
     # Add wav to list
-    inputs.append(wav)
+    inputs.append([wav, filename])
 
 # Initialize model with pre-trained weights
-model = AutoEncoder()
+model = AutoEncoder2L()
+#model.to(device)
 model.load_state_dict(torch.load(weights_path))
 model.eval()
 
-
 with torch.no_grad():
-    for input in inputs:
+    for input, filename in inputs:
+        #input = input.to(device)
+        input = torch.unsqueeze(input, 0)
         output = model(input)
+        input = torch.squeeze(input)
         #output = input
-        # Set the desired output path and filename
-        output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
-        filename = "output_audio.wav"
-
-        spec_to_wav(output, output_path+filename)
+        funct.spec_to_wav(output, output_path+filename)
 

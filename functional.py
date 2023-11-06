@@ -1,8 +1,10 @@
 import os
 import math
+import torch
 import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
+from autoencoder import upsample
 
 class Functional():
 
@@ -18,7 +20,7 @@ class Functional():
         return spectrogram(tensor)
 
     def resample(self, tensor, old_sample_rate):
-        resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=waveform.dtype)
+        resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=tensor.dtype)
         return resampler(tensor)
 
     def pad(self, tensor):
@@ -27,7 +29,7 @@ class Functional():
         right_pad = w_padding - left_pad
         return F.pad(tensor, (left_pad, right_pad))
 
-    def get_filelist(self, comp_path):
+    def get_filelist(self, comp_path, same_time):
         filelist = []
         for filename in os.listdir(comp_path):
             wav, sr = torchaudio.load(comp_path+filename)
@@ -36,8 +38,9 @@ class Functional():
             if(sr != self.sample_rate):
                 self.resample(wav, sr, sample_rate)
 
+            # Determine if file will be split up
             time = wav.shape[1]
-            if(time <= self.max_time):
+            if((not same_time) or time <= self.max_time):
                 filelist.append([filename, None])
             else:
                 remainder = time % self.max_time
@@ -65,7 +68,7 @@ class Functional():
             else:
                 return tensor[:, split_start:split_start+self.max_time]
 
-    def process_wavs(self, comp_path, uncomp_path, fileinfo, train):
+    def process_wavs(self, comp_path, uncomp_path, fileinfo, same_time):
         # Load wavs
         filename = fileinfo[0]
         comp_wav_path = comp_path + filename
@@ -75,15 +78,15 @@ class Functional():
 
         # Resample if not expected sample rate
         if(comp_sample_rate != self.sample_rate):
-            print(f"\"{comp_wav_path}\" has sample rate of {comp_sample_rate}Hz, resampling")
+            #print(f"\"{comp_wav_path}\" has sample rate of {comp_sample_rate}Hz, resampling")
             self.resample(comp_wav, comp_sample_rate)
 
         if(uncomp_sample_rate != self.sample_rate):
-            print(f"\"{uncomp_wav_path}\" has sample rate of {uncomp_sample_rate}Hz, resampling")
+            #print(f"\"{uncomp_wav_path}\" has sample rate of {uncomp_sample_rate}Hz, resampling")
             self.resample(uncomp_wav, uncomp_sample_rate)
 
-        # All training tensors should have the same time length
-        if(train):
+        # All DataLoader tensors should have the same time length if batch size > 1
+        if(same_time):
             split_start = fileinfo[1]
             comp_wav = self.split(comp_wav, split_start)
             uncomp_wav = self.split(uncomp_wav, split_start)
@@ -91,10 +94,16 @@ class Functional():
         # Return input and label spectrograms
         return self.transform(comp_wav), self.transform(uncomp_wav)
 
+    # Tensor should be torchaudio complex spectrogram
     def spec_to_wav(self, tensor, output_path):
+        # Upsample if max pooling was used 
+        #tensor = upsample(tensor, [self.n_fft // 2 + 1, tensor.shape[2]])
 
         inv_spec = T.InverseSpectrogram(n_fft=self.n_fft)
         tensor = inv_spec(tensor)
+
+        if(tensor.dim() > 2):
+            tensor = torch.squeeze(tensor)
 
         # Save the output as a WAV file
         torchaudio.save(output_path, tensor, self.sample_rate)
