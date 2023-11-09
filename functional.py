@@ -4,23 +4,25 @@ import torch
 import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
-from autoencoder import upsample
 
 class Functional():
 
-    # Class data fields
-    n_fft = 4096
-
-    def __init__(self, sample_rate, max_time):
+    def __init__(self, sample_rate, max_time, device):
         self.sample_rate = sample_rate
         self.max_time = max_time
+        self.device = device
 
-    def transform(self, tensor):
-        spectrogram = T.Spectrogram(n_fft=self.n_fft, power=None)
-        return spectrogram(tensor)
+    def wav_to_mel_db(self, tensor, n_fft=1024, f_max=22050, n_mels=64, top_db=80):
+        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=n_fft, f_max=f_max, n_mels=n_mels)
+        mel = mel.to(self.device)
+        amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
+        amp_to_db = amp_to_db.to(self.device)
+        
+        return amp_to_db(mel(tensor))
 
     def resample(self, tensor, old_sample_rate):
         resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=tensor.dtype)
+        resampler = resampler.to(self.device)
         return resampler(tensor)
 
     def pad(self, tensor):
@@ -32,10 +34,12 @@ class Functional():
     def get_filelist(self, comp_path, same_time):
         filelist = []
         for filename in os.listdir(comp_path):
+            # Load waveform from file
             wav, sr = torchaudio.load(comp_path+filename)
 
             # Resample if not expected sample rate
             if(sr != self.sample_rate):
+                wav = wav.to(self.device)
                 self.resample(wav, sr, sample_rate)
 
             # Determine if file will be split up
@@ -44,7 +48,7 @@ class Functional():
                 filelist.append([filename, None])
             else:
                 remainder = time % self.max_time
-                if(remainder > (self.max_time/3)):
+                if(remainder > (self.max_time/2)):
                     num_parts = int(math.ceil(time/self.max_time))
                 else:
                     num_parts = int(time/self.max_time)
@@ -69,12 +73,16 @@ class Functional():
                 return tensor[:, split_start:split_start+self.max_time]
 
     def process_wavs(self, comp_path, uncomp_path, fileinfo, same_time):
-        # Load wavs
+        # Load waveforms
         filename = fileinfo[0]
         comp_wav_path = comp_path + filename
         comp_wav, comp_sample_rate = torchaudio.load(comp_wav_path)
         uncomp_wav_path = uncomp_path + filename.replace(".flac-compressed-", "")
         uncomp_wav, uncomp_sample_rate = torchaudio.load(uncomp_wav_path)
+
+        # Move waveforms to device
+        comp_wav = comp_wav.to(self.device)
+        uncomp_wav = uncomp_wav.to(self.device)
 
         # Resample if not expected sample rate
         if(comp_sample_rate != self.sample_rate):
@@ -91,17 +99,10 @@ class Functional():
             comp_wav = self.split(comp_wav, split_start)
             uncomp_wav = self.split(uncomp_wav, split_start)
 
-        # Return input and label spectrograms
-        return self.transform(comp_wav), self.transform(uncomp_wav)
+        # Return input and label waveforms
+        return comp_wav, uncomp_wav
 
-    # Tensor should be torchaudio complex spectrogram
-    def spec_to_wav(self, tensor, output_path):
-        # Upsample if max pooling was used 
-        #tensor = upsample(tensor, [self.n_fft // 2 + 1, tensor.shape[2]])
-
-        inv_spec = T.InverseSpectrogram(n_fft=self.n_fft)
-        tensor = inv_spec(tensor)
-
+    def save_wav(self, tensor, output_path):
         if(tensor.dim() > 2):
             tensor = torch.squeeze(tensor)
 

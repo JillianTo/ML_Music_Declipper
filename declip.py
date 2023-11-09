@@ -1,6 +1,7 @@
 import os
-from autoencoder import AutoEncoder, AutoEncoder2L
+from autoencoder import AutoEncoder, upsample
 from functional import Functional
+import librosa
 
 import torch
 import torch.nn as nn
@@ -11,7 +12,7 @@ import torchaudio.transforms as T
 
 # Hyperparameters
 path = "/mnt/Elements08/Music/ml/test/"
-weights_path = "/home/jto/Documents/AIDeclip/results/model00.pth"
+weights_path = "/home/jto/Documents/AIDeclip/results/model01.pth"
 output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
 sample_rate = 44100
 
@@ -29,29 +30,31 @@ print(f"Using {device} device")
 # Get files to declip
 inputs = []
 for filename in os.listdir(path):
-    wav, _ = torchaudio.load(path+filename, normalize=True)
+    wav, _ = torchaudio.load(path+filename)
 
     # TODO: Resample if not expected sample rate
 
     # Transform wav to spectrogram
     funct = Functional(sample_rate, None)
-    wav = funct.transform(wav)
+    #wav = funct.transform(wav)
 
     # Add wav to list
-    inputs.append([wav, filename])
+    inputs.append([wav, filename, wav.shape[1]])
 
 # Initialize model with pre-trained weights
-model = AutoEncoder2L()
-#model.to(device)
-model.load_state_dict(torch.load(weights_path))
+model = AutoEncoder()
+model.to(device)
+model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
 model.eval()
 
 with torch.no_grad():
-    for input, filename in inputs:
-        #input = input.to(device)
+    for input, filename, time in inputs:
+        #print(input.shape)
         input = torch.unsqueeze(input, 0)
+        input = input.to(device)
         output = model(input)
-        input = torch.squeeze(input)
-        #output = input
-        funct.spec_to_wav(output, output_path+filename)
+        #output = upsample(output, [2049, time])
+        output = torch.squeeze(output)
+        output = output.to("cpu")
+        torchaudio.save(output_path+filename, output, sample_rate)
 
