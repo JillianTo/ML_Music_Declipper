@@ -1,20 +1,19 @@
 import os
-from autoencoder import AutoEncoder, upsample
+from audiodataset import AudioDataset
+from autoencoder import SpecAutoEncoder, WavAutoEncoder
 from functional import Functional
-import librosa
 
 import torch
 import torch.nn as nn
-import torch.nn.functional as F
 import torchaudio
-from torchaudio.io import StreamReader
 import torchaudio.transforms as T
 
-# Hyperparameters
-path = "/mnt/Elements08/Music/ml/test/"
-weights_path = "/home/jto/Documents/AIDeclip/results/model01.pth"
+# Parameters
+path = "/mnt/MP600/data/comp/declipTest/"
+weights_path = "/home/jto/Documents/AIDeclip/results/model02.pth"
 output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
 sample_rate = 44100
+spectrogram_autoencoder = True
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -28,33 +27,28 @@ device = "cpu"
 print(f"Using {device} device")
 
 # Get files to declip
-inputs = []
-for filename in os.listdir(path):
-    wav, _ = torchaudio.load(path+filename)
-
-    # TODO: Resample if not expected sample rate
-
-    # Transform wav to spectrogram
-    funct = Functional(sample_rate, None)
-    #wav = funct.transform(wav)
-
-    # Add wav to list
-    inputs.append([wav, filename, wav.shape[1]])
+funct = Functional(sample_rate, 3500000, device)
+dataset = AudioDataset(funct, path, None, True)
 
 # Initialize model with pre-trained weights
-model = AutoEncoder()
+if spectrogram_autoencoder:
+    model = SpecAutoEncoder(device)
+    print("Using spectrogram autoencoder")
+else:
+    model = WavAutoEncoder()
+    print("Using waveform autoencoder")
 model.to(device)
-model.load_state_dict(torch.load(weights_path, map_location=torch.device('cpu')))
+model.load_state_dict(torch.load(weights_path, map_location=torch.device(device)))
 model.eval()
 
 with torch.no_grad():
-    for input, filename, time in inputs:
-        #print(input.shape)
-        input = torch.unsqueeze(input, 0)
+    i = 0
+    for input, filename in dataset:
         input = input.to(device)
+        input = torch.unsqueeze(input, 0)
         output = model(input)
-        #output = upsample(output, [2049, time])
         output = torch.squeeze(output)
-        output = output.to("cpu")
-        torchaudio.save(output_path+filename, output, sample_rate)
+        funct.save_wav(output, output_path+f"{i}"+filename)
+        print(f"Saved \"{output_path}{i}{filename}\"")
+        i = i+1
 

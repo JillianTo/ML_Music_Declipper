@@ -1,6 +1,8 @@
 import os
 import math
+from tqdm import tqdm
 import torch
+import torch.nn as nn
 import torch.nn.functional as F
 import torchaudio
 import torchaudio.transforms as T
@@ -12,13 +14,31 @@ class Functional():
         self.max_time = max_time
         self.device = device
 
-    def wav_to_mel_db(self, tensor, n_fft=1024, f_max=22050, n_mels=64, top_db=80):
-        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=n_fft, f_max=f_max, n_mels=n_mels)
+    def wav_to_mel_db(self, tensor, n_fft=1024, n_mels=64, top_db=80):
+        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=n_fft, f_max=self.sample_rate>>1, n_mels=n_mels)
         mel = mel.to(self.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         
         return amp_to_db(mel(tensor))
+
+    def wav_to_pow_db(self, tensor, n_fft=4096, top_db=80):
+        pow_spec = T.Spectrogram(n_fft=n_fft, power=2)
+        pow_spec = pow_spec.to(self.device)
+        amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
+        amp_to_db = amp_to_db.to(self.device)
+        
+        return amp_to_db(pow_spec(tensor))
+
+    def wav_to_db(self, tensor, top_db=80):
+        amp_to_db = T.AmplitudeToDB(stype="amplitude", top_db=top_db)
+        amp_to_db = amp_to_db.to(self.device)
+        return amp_to_db(tensor)
+
+    def upsample(self, tensor, time):
+        upsampler = nn.Upsample(time)
+        upsampler = upsampler.to(self.device)
+        return upsampler(tensor)
 
     def resample(self, tensor, old_sample_rate):
         resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=tensor.dtype)
@@ -33,25 +53,18 @@ class Functional():
 
     def get_filelist(self, comp_path, same_time):
         filelist = []
-        for filename in os.listdir(comp_path):
-            # Load waveform from file
-            wav, sr = torchaudio.load(comp_path+filename)
-
-            # Resample if not expected sample rate
-            if(sr != self.sample_rate):
-                wav = wav.to(self.device)
-                self.resample(wav, sr, sample_rate)
-
+        for filename in tqdm(os.listdir(comp_path)):
             # Determine if file will be split up
-            time = wav.shape[1]
+            time = torchaudio.info(comp_path+filename).num_frames
             if((not same_time) or time <= self.max_time):
                 filelist.append([filename, None])
             else:
-                remainder = time % self.max_time
-                if(remainder > (self.max_time/2)):
-                    num_parts = int(math.ceil(time/self.max_time))
-                else:
-                    num_parts = int(time/self.max_time)
+                #remainder = time % self.max_time
+                #if(remainder > (self.max_time/1)):
+                #    num_parts = int(math.ceil(time/self.max_time))
+                #else:
+                #    num_parts = int(time/self.max_time)
+                num_parts = int(time/self.max_time)
                 for i in range(0, num_parts+1):
                     filelist.append([filename, self.max_time*i])
 
@@ -72,6 +85,30 @@ class Functional():
             else:
                 return tensor[:, split_start:split_start+self.max_time]
 
+    # Return input waveform and filename 
+    def process_wav(self, comp_path, fileinfo, same_time):
+        # Load waveforms
+        filename = fileinfo[0]
+        comp_wav_path = comp_path + filename
+        comp_wav, comp_sample_rate = torchaudio.load(comp_wav_path)
+
+        # Move waveforms to device
+        comp_wav = comp_wav.to(self.device)
+
+        # Resample if not expected sample rate
+        if(comp_sample_rate != self.sample_rate):
+            #print(f"\"{comp_wav_path}\" has sample rate of {comp_sample_rate}Hz, resampling")
+            comp_wav = self.resample(comp_wav, comp_sample_rate)
+
+        # All DataLoader tensors should have the same time length if batch size > 1
+        if(same_time):
+            split_start = fileinfo[1]
+            comp_wav = self.split(comp_wav, split_start)
+
+        # Return input waveforms and filename
+        return comp_wav, filename
+    
+    # Return input and label waveforms
     def process_wavs(self, comp_path, uncomp_path, fileinfo, same_time):
         # Load waveforms
         filename = fileinfo[0]
@@ -87,11 +124,11 @@ class Functional():
         # Resample if not expected sample rate
         if(comp_sample_rate != self.sample_rate):
             #print(f"\"{comp_wav_path}\" has sample rate of {comp_sample_rate}Hz, resampling")
-            self.resample(comp_wav, comp_sample_rate)
+            comp_wav = self.resample(comp_wav, comp_sample_rate)
 
         if(uncomp_sample_rate != self.sample_rate):
             #print(f"\"{uncomp_wav_path}\" has sample rate of {uncomp_sample_rate}Hz, resampling")
-            self.resample(uncomp_wav, uncomp_sample_rate)
+            uncomp_wav = self.resample(uncomp_wav, uncomp_sample_rate)
 
         # All DataLoader tensors should have the same time length if batch size > 1
         if(same_time):
@@ -106,6 +143,9 @@ class Functional():
         if(tensor.dim() > 2):
             tensor = torch.squeeze(tensor)
 
+        # Input tensor must be on CPU to be saved
+        out = tensor.to("cpu")
+
         # Save the output as a WAV file
-        torchaudio.save(output_path, tensor, self.sample_rate)
+        torchaudio.save(output_path, out, self.sample_rate)
 

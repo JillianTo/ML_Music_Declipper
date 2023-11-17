@@ -13,4 +13,7 @@ class AudioDataset(Dataset):
         return len(self.filelist)
 
     def __getitem__(self, idx):
-        return self.funct.process_wavs(self.comp_path, self.uncomp_path, self.filelist[idx], self.same_time)
+        if(self.uncomp_path != None):
+            return self.funct.process_wavs(self.comp_path, self.uncomp_path, self.filelist[idx], self.same_time)
+        else:
+            return self.funct.process_wav(self.comp_path, self.filelist[idx], self.same_time)

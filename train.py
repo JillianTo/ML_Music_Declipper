@@ -1,4 +1,5 @@
 import os
+import sys
 from aim import Run
 from tqdm import tqdm
 from audiodataset import AudioDataset
@@ -17,34 +18,42 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.001,
+    "learning_rate": 0.00001,
     "batch_size": 2,
     "test_batch_size": 1,
-    "num_epochs": 10, 
+    "num_epochs": 1000, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
     #"compressed_data_path": "/mnt/MP600/data/comp/train/",
-    "compressed_data_path": "/mnt/MP600/data/comp/small/",
-    "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
+    "compressed_data_path": "/mnt/MP600/data/comp/small/train/",
+    #"test_compressed_data_path": "/mnt/MP600/data/comp/test/",
+    "test_compressed_data_path": "/mnt/MP600/data/comp/small/test/",
     "results_path": "/home/jto/Documents/AIDeclip/results/",
-    "max_time": 14000000,
+    #"max_time": 14000000,
+    #"max_time": 284700,
+    "max_time": 1500000,
+    "test_max_time": 3500000,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
     "weight_decay": 0,
-    "loss_threshold": 0,
-    "spectrogram_autoencoder": False,
+    "spectrogram_autoencoder": True,
+    #"preload_weights_path": "/home/jto/Documents/AIDeclip/results/spece/model07.pth"
     "preload_weights_path": None
 }
 
 # Save run parameters to variables for easier access
+learning_rate = run["hparams", "learning_rate"]
+sample_rate = run["hparams", "expected_sample_rate"]
+batch_size = run["hparams", "batch_size"]
 test_batch_size = run["hparams", "test_batch_size"]
 uncomp_path = run["hparams", "uncompressed_data_path"]
+results_path = run["hparams", "results_path"]
 num_workers = run["hparams", "num_workers"]
 prefetch_factor = run["hparams", "prefetch_factor"]
 pin_memory = run["hparams", "pin_memory"]
-loss_thres = run["hparams", "loss_threshold"]
 preload_weights_path = run["hparams", "preload_weights_path"]
+weight_decay = run["hparams", "weight_decay"]
 
 # Get CPU, GPU, or MPS device for training
 device = (
@@ -61,22 +70,26 @@ print(f"Using {device} device")
 print("\nLoading data...")
 
 # Add inputs and labels to training dataset
-funct = Functional(run["hparams", "expected_sample_rate"], run["hparams", "max_time"], device)
+funct = Functional(sample_rate, run["hparams", "max_time"], device)
 training_data = AudioDataset(funct, run["hparams", "compressed_data_path"], uncomp_path, True)
 print(f"Added {len(training_data)} file pairs to training data")
 
 # Add inputs and labels to training dataset
-test_data = AudioDataset(funct, run["hparams", "test_compressed_data_path"], uncomp_path, test_batch_size==1)
+test_funct = Functional(sample_rate, run["hparams", "test_max_time"], device)
+#test_data = AudioDataset(funct, run["hparams", "test_compressed_data_path"], uncomp_path, not(batch_size != 1 and test_batch_size==1))
+test_data = AudioDataset(test_funct, run["hparams", "test_compressed_data_path"], uncomp_path, True)
 print(f"Added {len(test_data)} file pairs to test data")
 
 # Create data loaders
-trainloader = DataLoader(training_data, batch_size=run["hparams", "batch_size"], shuffle=True, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
-testloader = DataLoader(test_data, batch_size=test_batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+if __name__ == '__main__':
+    #torch.multiprocessing.set_start_method('spawn', force=True)
+    trainloader = DataLoader(training_data, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
+    testloader = DataLoader(test_data, batch_size=test_batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
 
 # Initialize model, loss function, and optimizer
 print("\nInitializing model, loss function, and optimizer...")
 if run["hparams", "spectrogram_autoencoder"]:
-    model = SpecAutoEncoder()
+    model = SpecAutoEncoder(device)
     print("Using spectrogram autoencoder")
 else:
     model = WavAutoEncoder()
@@ -87,7 +100,7 @@ if preload_weights_path != None:
 
 model.to(device)
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=run["hparams", "learning_rate"], weight_decay=run["hparams", "weight_decay"])
+optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
 
 # Training Loop
 print("Starting training loop...")
@@ -106,8 +119,13 @@ for epoch in range(run["hparams", "num_epochs"]):
         output = model(comp_wav)
 
         # Convert output and uncompressed wav to Mel spectrograms for loss calculation
-        output = funct.wav_to_mel_db(output)
-        uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+        #output = funct.wav_to_mel_db(output)
+        #uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+        output = funct.wav_to_pow_db(output)
+        uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
+        #output = funct.wav_to_db(output)
+        #uncomp_wav = funct.wav_to_db(uncomp_wav)
+        #output = funct.upsample(output, uncomp_wav.shape[2])
 
         # Compute the loss value: this measures how well the predicted outputs match the true labels
         loss = criterion(output, uncomp_wav)
@@ -134,8 +152,13 @@ for epoch in range(run["hparams", "num_epochs"]):
         del uncomp_wav
         del output
 
-    # Log average loss to aim
-    run.track(avg_loss, name='avg_loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
+        # Log average loss to aim
+        run.track(avg_loss, name='avg_loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
+
+    # Check for nan training loss
+    if(avg_loss != avg_loss):
+        print("Average training loss is nan, force quitting")
+        break
 
     # Testing phase
     model.eval()
@@ -149,8 +172,13 @@ for epoch in range(run["hparams", "num_epochs"]):
             output = model(comp_wav)
 
             # Convert output and uncompressed wav to Mel spectrograms for loss calculation
-            output = funct.wav_to_mel_db(output)
-            uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+            #output = funct.wav_to_mel_db(output)
+            #uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+            output = funct.wav_to_pow_db(output)
+            uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
+            #output = funct.wav_to_db(output)
+            #uncomp_wav = funct.wav_to_db(uncomp_wav)
+            #output = funct.upsample(output, uncomp_wav.shape[2])
 
             # Compute the loss value: this measures how well the predicted outputs match the true labels
             loss = criterion(output, uncomp_wav)
@@ -174,14 +202,23 @@ for epoch in range(run["hparams", "num_epochs"]):
         # Log average loss to aim
         run.track(avg_loss, name='avg_loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
 
-    # Save model after every epoch
-    torch.save(model.state_dict(), run["hparams", "results_path"]+f"model{epoch:02d}.pth")
-
-    # Stop training if average loss has not changed by more than threshold amount or increased
-    if(avg_loss > last_avg_loss-loss_thres):
-        print("Loss change not within threshold, forcing training stop")
-        break
+    # Reduced learning rate or stop training if average validation loss increased
+    if(avg_loss > last_avg_loss):
+        if(prev_model != None):
+            learning_rate = learning_rate/10
+            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+            print(f"Validation loss increased, reducing learning rate to {learning_rate} and loading \"{prev_model}\"")
+            model.load_state_dict(torch.load(prev_model))
+            prev_model=None
+        else:
+            print("Validation loss increased, force quitting training")
+            break
     else:
+        # Save average loss
         last_avg_loss = avg_loss
+
+        # Save model after every epoch with reduced validation loss
+        prev_model = results_path+f"model{(epoch+1):02d}.pth"
+        torch.save(model.state_dict(), prev_model)
 
 print("Finished Training")
