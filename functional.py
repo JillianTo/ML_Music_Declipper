@@ -30,10 +30,49 @@ class Functional():
         
         return amp_to_db(pow_spec(tensor))
 
+    def wav_to_complex(self, tensor, n_fft=4096):
+        complex_spec = T.Spectrogram(n_fft=n_fft, power=None)
+        complex_spec = complex_spec.to(self.device)
+        return  complex_spec(tensor)
+
     def wav_to_db(self, tensor, top_db=80):
         amp_to_db = T.AmplitudeToDB(stype="amplitude", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         return amp_to_db(tensor)
+
+    def compute_std_mean(self, tensor, n_fft=4096):
+        # Convert input to complex spectrogram
+        x = self.wav_to_complex(tensor, n_fft=n_fft)
+
+        # Calculate phase of complex spectrogram
+        phase = torch.atan(x.imag/(x.real+1e-7))
+        phase[x.real < 0] += 3.14159265358979323846264338
+
+        # Calculate magnitude of complex spectrogram
+        x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
+        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
+        amp_to_db = amp_to_db.to(self.device)
+        x = amp_to_db(x)
+
+        # Calculate standard deviation and mean
+        return torch.std_mean(x)
+
+    def find_max_min(self, tensor, n_fft=4096):
+        # Convert input to complex spectrogram
+        x = self.wav_to_complex(tensor, n_fft=n_fft)
+
+        # Calculate phase of complex spectrogram
+        phase = torch.atan(x.imag/(x.real+1e-7))
+        phase[x.real < 0] += 3.14159265358979323846264338
+
+        # Calculate magnitude of complex spectrogram
+        x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
+        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
+        amp_to_db = amp_to_db.to(self.device)
+        x = amp_to_db(x)
+
+        # Calculate maximum and minimum
+        return torch.max(x), torch.min(x)
 
     def upsample(self, tensor, time):
         upsampler = nn.Upsample(time)

@@ -19,9 +19,14 @@ run = Run(experiment="declipper")
 # Log run parameters
 run["hparams"] = {
     "learning_rate": 0.00001,
-    "batch_size": 2,
+    "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 1000, 
+    "mean": -7.5930,
+    "std": 16.4029, 
+    "min": -62.2261,
+    "max": 55.9438,
+    "stats_compute_stop": None,
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
     #"compressed_data_path": "/mnt/MP600/data/comp/train/",
@@ -31,19 +36,25 @@ run["hparams"] = {
     "results_path": "/home/jto/Documents/AIDeclip/results/",
     #"max_time": 14000000,
     #"max_time": 284700,
-    "max_time": 1500000,
+    "max_time": 1250000,
     "test_max_time": 3500000,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
     "weight_decay": 0,
     "spectrogram_autoencoder": True,
-    #"preload_weights_path": "/home/jto/Documents/AIDeclip/results/spece/model07.pth"
-    "preload_weights_path": None
+    #"preload_weights_path": "/home/jto/Documents/AIDeclip/results/model02.pth"
+    "preload_weights_path": None,
+    "accuracy_bound": 2
 }
 
 # Save run parameters to variables for easier access
 learning_rate = run["hparams", "learning_rate"]
+mean = run["hparams", "mean"]
+std = run["hparams", "std"]
+minimum = run["hparams", "min"]
+maximum = run["hparams", "max"]
+stats_compute_stop = run["hparams", "stats_compute_stop"]
 sample_rate = run["hparams", "expected_sample_rate"]
 batch_size = run["hparams", "batch_size"]
 test_batch_size = run["hparams", "test_batch_size"]
@@ -54,6 +65,7 @@ prefetch_factor = run["hparams", "prefetch_factor"]
 pin_memory = run["hparams", "pin_memory"]
 preload_weights_path = run["hparams", "preload_weights_path"]
 weight_decay = run["hparams", "weight_decay"]
+acc_bound = run["hparams", "accuracy_bound"]
 
 # Get CPU, GPU, or MPS device for training
 device = (
@@ -86,10 +98,56 @@ if __name__ == '__main__':
     trainloader = DataLoader(training_data, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
     testloader = DataLoader(test_data, batch_size=test_batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory, prefetch_factor=prefetch_factor)
 
+# Calculate mean and std for training set if not given
+if(mean == None or std == None):
+    print("Calculating mean and std...")
+    mean = 0
+    std = 0
+    pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Training Data Statistics")
+
+    for i, (comp_wav, _) in pbar:
+        curr_std, curr_mean = funct.compute_std_mean(comp_wav)
+        mean = mean + curr_mean
+        std = std + curr_std
+
+        # Update tqdm progress bar with fixed number of decimals for loss
+        pbar.set_postfix({"Mean": f"{curr_mean:.4f}", "Standard Deviation": f"{curr_std:.4f}"})
+
+        if(stats_compute_stop != None and stats_compute_stop < i-1):
+            print(f"Stopping mean and std calculation after {i+1} samples")
+            break
+
+    mean = mean/(i+1)
+    std = std/(i+1)
+    print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")
+
+# Find min and max for training set if not given
+if(minimum == None or maximum == None):
+    print("Finding min and max...")
+    minimum = 99999
+    maximum = -99999
+    pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Training Data Statistics")
+
+    for i, (comp_wav, _) in pbar:
+        curr_max, curr_min = funct.find_max_min(comp_wav)
+        if(curr_min < minimum):
+            minimum = curr_min
+        if(curr_max > maximum):
+            maximum = curr_max
+
+        # Update tqdm progress bar with fixed number of decimals for loss
+        pbar.set_postfix({"Min": f"{curr_min:.4f}", "Max": f"{curr_max:.4f}"})
+
+        if(stats_compute_stop != None and stats_compute_stop < i-1):
+            print(f"Stopping min and max finding after {i+1} samples")
+            break
+
+    print(f"Min: {minimum:.4f}, Max: {maximum:.4f}")
+
 # Initialize model, loss function, and optimizer
 print("\nInitializing model, loss function, and optimizer...")
 if run["hparams", "spectrogram_autoencoder"]:
-    model = SpecAutoEncoder(device)
+    model = SpecAutoEncoder(device, mean, std)
     print("Using spectrogram autoencoder")
 else:
     model = WavAutoEncoder()
@@ -105,11 +163,14 @@ optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight
 # Training Loop
 print("Starting training loop...")
 last_avg_loss = 9999
+last_avg_acc = 0
 for epoch in range(run["hparams", "num_epochs"]):
     # Training phase
     model.train()
     tot_loss = 0
+    tot_acc = 0
     avg_loss = 0
+    avg_acc = 0
     pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Train Epoch {epoch+1}")
     for i, (comp_wav, uncomp_wav) in pbar:
         # Zero the gradients of all optimized variables. This is to ensure that we don't accumulate gradients from previous batches, as gradients are accumulated by default in PyTorch
@@ -136,24 +197,31 @@ for epoch in range(run["hparams", "num_epochs"]):
         # Update the model's parameters using the optimizer's step method
         optimizer.step()
 
-        # Add loss to total loss
-        tot_loss += loss.item()
+        # Calculate accuracy
+        acc = torch.sum(torch.logical_and((output > uncomp_wav-acc_bound), (output < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
 
-        # Calculate average loss so far
+        # Add loss and accuracy to totals
+        tot_loss += loss.item()
+        tot_acc += acc
+
+        # Calculate average loss and accuracy so far
         avg_loss = tot_loss/(i+1)
+        avg_acc = tot_acc/(i+1)
 
         # Log loss to aim
         run.track(loss, name='loss', step=0.1, epoch=epoch+1, context={ "subset":"train" })
+        run.track(loss, name='acc', step=0.01, epoch=epoch+1, context={ "subset":"train" })
 
         # Update tqdm progress bar with fixed number of decimals for loss
-        pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}"})
+        pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}", "Accuracy": f"{acc:.4f}", "Average Accuracy": f"{avg_acc:.4f}"})
 
         # Explicitly delete tensors so they don't stay in used memory
         del uncomp_wav
         del output
 
         # Log average loss to aim
-        run.track(avg_loss, name='avg_loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
+        run.track(avg_loss, name='avg_loss', step=1, epoch=epoch+1, context={ "subset":"train" })
+        run.track(avg_loss, name='avg_acc', step=0.01, epoch=epoch+1, context={ "subset":"train" })
 
     # Check for nan training loss
     if(avg_loss != avg_loss):
@@ -164,8 +232,9 @@ for epoch in range(run["hparams", "num_epochs"]):
     model.eval()
     with torch.no_grad():
         tot_loss = 0
+        tot_acc = 0
         avg_loss = 0
-        acc = 0
+        avg_acc = 0
         pbar = tqdm(enumerate(testloader), total=len(testloader), desc=f"Test Epoch {epoch+1}")
         for i, (comp_wav, uncomp_wav) in pbar:
             # Forward pass
@@ -183,39 +252,47 @@ for epoch in range(run["hparams", "num_epochs"]):
             # Compute the loss value: this measures how well the predicted outputs match the true labels
             loss = criterion(output, uncomp_wav)
 
-            # Add loss to total loss
-            tot_loss += loss.item()
+            # Calculate accuracy 
+            acc = torch.sum(torch.logical_and((output > uncomp_wav-acc_bound), (output < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
 
-            # Calculate average loss so far
+            # Add loss and accuracy to totals
+            tot_loss += loss.item()
+            tot_acc += acc
+
+            # Calculate average loss and accuracy so far
             avg_loss = tot_loss/(i+1)
+            avg_acc = tot_acc/(i+1)
 
             # Log loss to aim
-            run.track(loss, name='loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
+            run.track(loss, name='loss', step=1, epoch=epoch+1, context={ "subset":"test" })
+            run.track(loss, name='acc', step=0.01, epoch=epoch+1, context={ "subset":"test" })
         
             # Update tqdm progress bar with fixed number of decimals for loss
-            pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}"})
+            pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}", "Accuracy": f"{acc:.4f}", "Average Accuracy": f"{avg_acc:.4f}"})
 
             # Explicitly delete tensors so they don't stay in used memory
             del uncomp_wav
             del output
 
         # Log average loss to aim
-        run.track(avg_loss, name='avg_loss', step=0.1, epoch=epoch+1, context={ "subset":"test" })
+        run.track(avg_loss, name='avg_loss', step=1, epoch=epoch+1, context={ "subset":"test" })
+        run.track(avg_loss, name='avg_acc', step=0.01, epoch=epoch+1, context={ "subset":"test" })
 
     # Reduced learning rate or stop training if average validation loss increased
-    if(avg_loss > last_avg_loss):
+    if(avg_loss > last_avg_loss and avg_acc < last_avg_acc):
         if(prev_model != None):
             learning_rate = learning_rate/10
             optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            print(f"Validation loss increased, reducing learning rate to {learning_rate} and loading \"{prev_model}\"")
+            print(f"Validation loss increased and accuracy decreased, reducing learning rate to {learning_rate} and loading \"{prev_model}\"")
             model.load_state_dict(torch.load(prev_model))
             prev_model=None
         else:
-            print("Validation loss increased, force quitting training")
+            print("Validation loss increased and accuracy decreased, force quitting training")
             break
     else:
-        # Save average loss
+        # Save average loss and accuracy
         last_avg_loss = avg_loss
+        last_avg_acc = avg_acc
 
         # Save model after every epoch with reduced validation loss
         prev_model = results_path+f"model{(epoch+1):02d}.pth"
