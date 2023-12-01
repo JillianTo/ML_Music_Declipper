@@ -9,11 +9,11 @@ from torch.utils.data import DataLoader
 print("Torch version: " + torch.__version__)
 
 # Parameters
-comp_path = "/mnt/MP600/data/comp/small/test/"
+comp_path = "/mnt/MP600/data/comp/test/"
 uncomp_path = "/mnt/MP600/data/uncomp/"
 sample_rate = 44100
 num_workers = 0
-acc_bound = 2
+acc_bound = 1
 
 # Get CPU, GPU, or MPS device for training
 device = (
@@ -30,8 +30,8 @@ print(f"Using {device} device")
 print("\nLoadling data...")
 
 # Add inputs and labels to dataset
-funct = Functional(sample_rate, None, device)
-test_data = AudioDataset(funct, comp_path, uncomp_path, False)
+funct = Functional(sample_rate, 999999999, device)
+test_data = AudioDataset(funct, comp_path, "test_filelist.txt", uncomp_path=uncomp_path, same_time=False)
 print(f"Added {len(test_data)} file pairs to test data")
 
 # Create data loaders
@@ -57,15 +57,12 @@ for i, (comp_wav, uncomp_wav) in pbar:
     upsample = nn.Upsample(uncomp_wav.shape[2])
     comp_wav = upsample(comp_wav)
 
-    #comp_wav = funct.wav_to_mel_db(comp_wav)
-    #uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
-    comp_wav = funct.wav_to_pow_db(comp_wav)
-    uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
+    comp_wav = funct.wav_to_mel_db(comp_wav)
+    uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+    #comp_wav = funct.wav_to_pow_db(comp_wav)
+    #uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
 
     # Compute the loss value: this measures how well the predicted outputs match the true labels
-    #real_loss = criterion(comp_wav.real, uncomp_wav.real)
-    #imag_loss = criterion(comp_wav.imag, uncomp_wav.imag)
-    #loss = (real_loss+imag_loss)/2
     loss = criterion(comp_wav, uncomp_wav)
 
     # Compute accuracy
@@ -80,6 +77,7 @@ for i, (comp_wav, uncomp_wav) in pbar:
 
 # Calculate average loss 
 avg_loss /= len(testloader)
+avg_acc /= len(testloader)
 
 # Print average loss
 print(f"Average MSE of test data: {avg_loss:>8f}\n")

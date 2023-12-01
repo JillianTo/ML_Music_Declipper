@@ -1,6 +1,6 @@
 import os
 import sys
-from aim import Run
+from aim import Run, Audio
 from tqdm import tqdm
 from audiodataset import AudioDataset
 from autoencoder import SpecAutoEncoder, WavAutoEncoder
@@ -18,42 +18,57 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.00001,
+    "learning_rate": 0.0003,
     "batch_size": 1,
     "test_batch_size": 1,
-    "num_epochs": 1000, 
-    "mean": -7.5930,
-    "std": 16.4029, 
-    "min": -62.2261,
-    "max": 55.9438,
+    "num_epochs": 5, 
+    #"mean": -7.5930,
+    #"std": 16.4029, 
+    #"mean": -8.9372,
+    #"std": 14.4010, 
+    "mean": -9.0133,
+    "std": 14.3514, 
+    #"mean": None,
+    #"std": None, 
     "stats_compute_stop": None,
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
     #"compressed_data_path": "/mnt/MP600/data/comp/train/",
     "compressed_data_path": "/mnt/MP600/data/comp/small/train/",
+    #"compressed_data_path": "/mnt/MP600/data/comp/test/",
     #"test_compressed_data_path": "/mnt/MP600/data/comp/test/",
     "test_compressed_data_path": "/mnt/MP600/data/comp/small/test/",
-    "results_path": "/home/jto/Documents/AIDeclip/results/",
+    #"test_compressed_data_path": "/mnt/MP600/data/comp/smallTest/",
+    "results_path": "/mnt/MP600/data/results/test/",
+    "max_time": 20000000,
+    #"max_time": 900000,
+    #"max_time": 1250000,
     #"max_time": 14000000,
-    #"max_time": 284700,
-    "max_time": 1250000,
-    "test_max_time": 3500000,
+    "test_max_time": 20000000,
+    #"test_max_time": 3500000,
+    #"test_max_time": 1800000,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
-    "weight_decay": 0,
-    "spectrogram_autoencoder": True,
-    #"preload_weights_path": "/home/jto/Documents/AIDeclip/results/model02.pth"
+    "spectrogram_autoencoder": False,
+    #"preload_weights_path": "/mnt/MP600/data/results/model01.pth",
     "preload_weights_path": None,
-    "accuracy_bound": 2
+    #"preload_optimizer_path": "/mnt/MP600/data/results/optimizer01.pth",
+    "preload_optimizer_path": None,
+    "preload_scheduler_path": None,
+    "accuracy_bound": 1,
+    "save_partial_epoch": False,
+    "scheduler_state": 0,
+    "scheduler_changes": 1,
+    "scheduler_factors": [(1/3), 0.1],
+    "scheduler_patiences": [1, 2],
+    "test_points": [0.02, 0.05],
 }
 
 # Save run parameters to variables for easier access
 learning_rate = run["hparams", "learning_rate"]
 mean = run["hparams", "mean"]
 std = run["hparams", "std"]
-minimum = run["hparams", "min"]
-maximum = run["hparams", "max"]
 stats_compute_stop = run["hparams", "stats_compute_stop"]
 sample_rate = run["hparams", "expected_sample_rate"]
 batch_size = run["hparams", "batch_size"]
@@ -64,8 +79,14 @@ num_workers = run["hparams", "num_workers"]
 prefetch_factor = run["hparams", "prefetch_factor"]
 pin_memory = run["hparams", "pin_memory"]
 preload_weights_path = run["hparams", "preload_weights_path"]
-weight_decay = run["hparams", "weight_decay"]
+preload_opt_path = run["hparams", "preload_optimizer_path"]
+preload_sch_path = run["hparams", "preload_scheduler_path"]
 acc_bound = run["hparams", "accuracy_bound"]
+sch_state = run["hparams", "scheduler_state"]
+sch_change = run["hparams", "scheduler_changes"]
+factors = run["hparams", "scheduler_factors"]
+patiences = run["hparams", "scheduler_patiences"]
+test_points = run["hparams", "test_points"]
 
 # Get CPU, GPU, or MPS device for training
 device = (
@@ -75,7 +96,7 @@ device = (
         if torch.backends.mps.is_available()
         else "cpu"
 )
-#device = "cpu"
+device = "cpu"
 print(f"Using {device} device")
 
 # Load wavs into training data
@@ -83,13 +104,12 @@ print("\nLoading data...")
 
 # Add inputs and labels to training dataset
 funct = Functional(sample_rate, run["hparams", "max_time"], device)
-training_data = AudioDataset(funct, run["hparams", "compressed_data_path"], uncomp_path, True)
+training_data = AudioDataset(funct, run["hparams", "compressed_data_path"], "filelist_strain.txt", same_time=batch_size!=1, pad_thres=2)
 print(f"Added {len(training_data)} file pairs to training data")
 
-# Add inputs and labels to training dataset
+# Add inputs and labels to test dataset
 test_funct = Functional(sample_rate, run["hparams", "test_max_time"], device)
-#test_data = AudioDataset(funct, run["hparams", "test_compressed_data_path"], uncomp_path, not(batch_size != 1 and test_batch_size==1))
-test_data = AudioDataset(test_funct, run["hparams", "test_compressed_data_path"], uncomp_path, True)
+test_data = AudioDataset(test_funct, run["hparams", "test_compressed_data_path"], "filelist_stest.txt", same_time=test_batch_size!=1, pad_thres=2)
 print(f"Added {len(test_data)} file pairs to test data")
 
 # Create data loaders
@@ -103,7 +123,7 @@ if(mean == None or std == None):
     print("Calculating mean and std...")
     mean = 0
     std = 0
-    pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Training Data Statistics")
+    pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Train Mean and Standard Deviation")
 
     for i, (comp_wav, _) in pbar:
         curr_std, curr_mean = funct.compute_std_mean(comp_wav)
@@ -121,75 +141,90 @@ if(mean == None or std == None):
     std = std/(i+1)
     print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")
 
-# Find min and max for training set if not given
-if(minimum == None or maximum == None):
-    print("Finding min and max...")
-    minimum = 99999
-    maximum = -99999
-    pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Training Data Statistics")
-
-    for i, (comp_wav, _) in pbar:
-        curr_max, curr_min = funct.find_max_min(comp_wav)
-        if(curr_min < minimum):
-            minimum = curr_min
-        if(curr_max > maximum):
-            maximum = curr_max
-
-        # Update tqdm progress bar with fixed number of decimals for loss
-        pbar.set_postfix({"Min": f"{curr_min:.4f}", "Max": f"{curr_max:.4f}"})
-
-        if(stats_compute_stop != None and stats_compute_stop < i-1):
-            print(f"Stopping min and max finding after {i+1} samples")
-            break
-
-    print(f"Min: {minimum:.4f}, Max: {maximum:.4f}")
-
-# Initialize model, loss function, and optimizer
+# Initialize model
 print("\nInitializing model, loss function, and optimizer...")
 if run["hparams", "spectrogram_autoencoder"]:
     model = SpecAutoEncoder(device, mean, std)
     print("Using spectrogram autoencoder")
 else:
-    model = WavAutoEncoder()
+    model = WavAutoEncoder(device)
     print("Using waveform autoencoder")
 if preload_weights_path != None:
     model.load_state_dict(torch.load(preload_weights_path))
-    print(f"Preloading weights from \"{preload_weights_path}\"")
-
+    print(f"Preloaded weights from \"{preload_weights_path}\"")
 model.to(device)
+
+# Initialize optimizer
+optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+if preload_opt_path != None:
+    optimizer.load_state_dict(torch.load(preload_opt_path))
+    print(f"Preloaded optimizer from \"{preload_opt_path}\"")
+
+# Initialize scheduler
+scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, factor=factors[sch_state], patience=patiences[sch_state], verbose=True)
+if preload_sch_path != None:
+    scheduler.load_state_dict(torch.load(preload_sch_path))
+    print(f"Preloaded scheduler from \"{preload_sch_path}\"")
+
+# Initialize loss function
 criterion = nn.MSELoss()
-optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
+
+# Steps needed for loss and acc plotting in aim
+train_step = 0
+small_test_step = 0
+test_step = 0
+
+# After how many train batches to run small test
+test_point = int(len(training_data)*test_points[sch_state])
+
+# Do not run small test when about to finish training
+last_test_point = int(len(training_data)*0.96)
+
+# Number of batches to check in small test
+small_test_size = int(len(testloader)*0.05)
+
+# Do not run small test ff learning rate will not be reduced by more than scheduler EPS
+run_small_test = (optimizer.param_groups[0]['lr']*(1-scheduler.factor) > scheduler.eps)
 
 # Training Loop
-print("Starting training loop...")
-last_avg_loss = 9999
-last_avg_acc = 0
+print("\nStarting training loop...")
 for epoch in range(run["hparams", "num_epochs"]):
     # Training phase
-    model.train()
     tot_loss = 0
     tot_acc = 0
     avg_loss = 0
     avg_acc = 0
     pbar = tqdm(enumerate(trainloader), total=len(trainloader), desc=f"Train Epoch {epoch+1}")
-    for i, (comp_wav, uncomp_wav) in pbar:
+    for i, (comp_wav, fileinfo) in pbar:
+        # Set model to train state
+        model.train()
+
         # Zero the gradients of all optimized variables. This is to ensure that we don't accumulate gradients from previous batches, as gradients are accumulated by default in PyTorch
         optimizer.zero_grad()
 
         # Forward pass
-        output = model(comp_wav)
+        comp_wav = model(comp_wav)
 
-        # Convert output and uncompressed wav to Mel spectrograms for loss calculation
-        #output = funct.wav_to_mel_db(output)
-        #uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
-        output = funct.wav_to_pow_db(output)
-        uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
-        #output = funct.wav_to_db(output)
+        # Get uncompressed waveform
+        fileinfo = (fileinfo[0][0], fileinfo[1].item())
+        uncomp_wav = funct.process_wav(uncomp_path, fileinfo, batch_size != 1, is_input=False)
+
+        # Convert input and label for loss calculation
+        comp_wav = torch.squeeze(comp_wav, dim=0)
+        comp_wav = funct.wav_to_mel_db(comp_wav)
+        uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
+        #comp_wav = funct.wav_to_pow_db(comp_wav)
+        #uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
+        #comp_wav = funct.wav_to_db(comp_wav)
         #uncomp_wav = funct.wav_to_db(uncomp_wav)
-        #output = funct.upsample(output, uncomp_wav.shape[2])
+        #comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
 
-        # Compute the loss value: this measures how well the predicted outputs match the true labels
-        loss = criterion(output, uncomp_wav)
+        # Compute the loss value: this measures how well the predicted comp_wavs match the true labels
+        loss = criterion(comp_wav, uncomp_wav)
+
+        # Force stop if loss is nan
+        if(loss != loss):
+            sys.exit("Training loss is nan, force exiting")
 
         # Backward pass: compute the gradient of the loss with respect to model parameters
         loss.backward()
@@ -198,7 +233,11 @@ for epoch in range(run["hparams", "num_epochs"]):
         optimizer.step()
 
         # Calculate accuracy
-        acc = torch.sum(torch.logical_and((output > uncomp_wav-acc_bound), (output < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
+        acc = torch.sum(torch.logical_and((comp_wav > uncomp_wav-acc_bound), (comp_wav < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
+
+        # Explicitly delete tensors so they don't stay in memory
+        del comp_wav
+        del uncomp_wav
 
         # Add loss and accuracy to totals
         tot_loss += loss.item()
@@ -209,93 +248,176 @@ for epoch in range(run["hparams", "num_epochs"]):
         avg_acc = tot_acc/(i+1)
 
         # Log loss to aim
-        run.track(loss, name='loss', step=0.1, epoch=epoch+1, context={ "subset":"train" })
-        run.track(loss, name='acc', step=0.01, epoch=epoch+1, context={ "subset":"train" })
+        run.track(loss, name='loss', step=train_step, epoch=epoch+1, context={ "subset":"train" })
+        run.track(acc, name='acc', step=train_step, epoch=epoch+1, context={ "subset":"train" })
 
         # Update tqdm progress bar with fixed number of decimals for loss
-        pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}", "Accuracy": f"{acc:.4f}", "Average Accuracy": f"{avg_acc:.4f}"})
+        pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Avg Loss": f"{avg_loss:.4f}", "Acc": f"{acc:.4f}", "Avg Acc": f"{avg_acc:.4f}"})
 
-        # Explicitly delete tensors so they don't stay in used memory
-        del uncomp_wav
-        del output
+        # Increment step for next aim log
+        train_step = train_step + 1
 
-        # Log average loss to aim
-        run.track(avg_loss, name='avg_loss', step=1, epoch=epoch+1, context={ "subset":"train" })
-        run.track(avg_loss, name='avg_acc', step=0.01, epoch=epoch+1, context={ "subset":"train" })
+        # If training has completed for test_point number of batches
+        if(run["hparams", "save_partial_epoch"]):
+            if(i%test_point == 0 and i < last_test_point and i > 0):
+                if(run_small_test):
+                    # Small testing phase
+                    model.eval()
+                    with torch.no_grad():
+                        tot_test_loss = 0
+                        tot_test_acc = 0
+                        avg_test_loss = 0
+                        avg_test_acc = 0
+                        test_pbar = tqdm(enumerate(testloader), total=small_test_size, desc=f"Small Test Epoch {scheduler.last_epoch+1}")
+                        for i, (comp_wav, fileinfo) in test_pbar:
+                            # Stop small test after small_test_size batches
+                            if(not i < small_test_size):
+                                break
+                            # Forward pass
+                            comp_wav = model(comp_wav)
 
-    # Check for nan training loss
-    if(avg_loss != avg_loss):
-        print("Average training loss is nan, force quitting")
-        break
+                            # Get uncompressed waveform
+                            fileinfo = (fileinfo[0][0], fileinfo[1].item())
+                            uncomp_wav = test_funct.process_wav(uncomp_path, fileinfo, batch_size != 1, is_input=False)  
 
-    # Testing phase
+                            # Convert input and label for loss calculation
+                            comp_wav = torch.squeeze(comp_wav, dim=0)
+                            comp_wav = test_funct.wav_to_mel_db(comp_wav)
+                            uncomp_wav = test_funct.wav_to_mel_db(uncomp_wav)
+                            #comp_wav = test_funct.wav_to_pow_db(comp_wav)
+                            #uncomp_wav = test_funct.wav_to_pow_db(uncomp_wav)
+                            #comp_wav = funct.wav_to_db(comp_wav)
+                            #uncomp_wav = funct.wav_to_db(uncomp_wav)
+                            #comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
+
+                            # Compute the loss value: this measures how well the predicted comp_wavs match the true labels
+                            loss = criterion(comp_wav, uncomp_wav)
+
+                            # Calculate accuracy 
+                            acc = torch.sum(torch.logical_and((comp_wav > uncomp_wav-acc_bound), (comp_wav < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
+
+                            # Explicitly delete tensor so it doesn't stay in memory
+                            del uncomp_wav
+
+                            # Add loss and accuracy to totals
+                            tot_test_loss += loss.item()
+                            tot_test_acc += acc
+
+                            # Calculate average loss and accuracy so far
+                            avg_test_loss = tot_test_loss/(i+1)
+                            avg_test_acc = tot_test_acc/(i+1)
+
+                            # Log loss to aim
+                            run.track(loss, name='loss', step=small_test_step, epoch=epoch+1, context={ "subset":"small_test" })
+                            run.track(acc, name='acc', step=small_test_step, epoch=epoch+1, context={ "subset":"small_test" })
+                        
+                            # Increment step for next aim log
+                            small_test_step = small_test_step + 1
+
+                            # Update tqdm progress bar with fixed number of decimals for loss
+                            test_pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Avg Loss": f"{avg_test_loss:.4f}", "Acc": f"{acc:.4f}", "Avg Acc": f"{avg_test_acc:.4f}"})
+
+                        # Log average test loss and accuracy and last model output to Aim
+                        step = scheduler.last_epoch + 1
+                        run.track(avg_test_loss, name='avg_loss', step=step, epoch=epoch+1, context={ "subset":"small_test" })
+                        run.track(avg_test_acc, name='avg_acc', step=step, epoch=epoch+1, context={ "subset":"small_test" })
+                        run.track(Audio(comp_wav), name='outputs', step=step, epoch=epoch+1, context={ "subset":"small_test" })
+
+                        # Explictly delete tensor so it doesn't stay in memory
+                        del comp_wav
+
+                    # Send training loss to scheduler
+                    scheduler.step(avg_test_loss)
+
+                    # Check if learning rate was changed
+                    if(optimizer.param_groups[0]['lr'] < learning_rate):
+                        # Save current learning rate
+                        learning_rate = optimizer.param_groups[0]['lr']
+                        # Change scheduler parameters after learning rate reduction
+                        if(sch_state < sch_change):
+                            sch_state = sch_state + 1
+                            scheduler.factor = factors[sch_state]
+                            scheduler.patience = patiences[sch_state]
+                            test_point = int(len(training_data)*test_points[sch_state])
+                        # If learning rate will not be reduced by more than scheduler EPS, then do not run small test anymore
+                        if(not (learning_rate*(1-scheduler.factor) > scheduler.eps)):
+                            run_small_test = False
+
+                # Save model and optimizer states
+                torch.save(model.state_dict(), results_path+f"model{(epoch+1):02d}.pth")
+                torch.save(optimizer.state_dict(), results_path+f"optimizer{(epoch+1):02d}.pth")
+                torch.save(scheduler.state_dict(), results_path+f"scheduler{(epoch+1):02d}.pth")
+
+    # Log average training loss to aim
+    run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, context={ "subset":"train" })
+    run.track(avg_acc, name='avg_acc', step=epoch+1, epoch=epoch+1, context={ "subset":"train" })
+
+    # Full testing phase
     model.eval()
     with torch.no_grad():
-        tot_loss = 0
-        tot_acc = 0
-        avg_loss = 0
-        avg_acc = 0
-        pbar = tqdm(enumerate(testloader), total=len(testloader), desc=f"Test Epoch {epoch+1}")
-        for i, (comp_wav, uncomp_wav) in pbar:
+        tot_test_loss = 0
+        tot_test_acc = 0
+        avg_test_loss = 0
+        avg_test_acc = 0
+        test_pbar = tqdm(enumerate(testloader), total=len(testloader), desc=f"Test Epoch {epoch+1}")
+        for i, (comp_wav, fileinfo) in test_pbar:
             # Forward pass
-            output = model(comp_wav)
+            comp_wav = model(comp_wav)
 
-            # Convert output and uncompressed wav to Mel spectrograms for loss calculation
-            #output = funct.wav_to_mel_db(output)
-            #uncomp_wav = funct.wav_to_mel_db(uncomp_wav)
-            output = funct.wav_to_pow_db(output)
-            uncomp_wav = funct.wav_to_pow_db(uncomp_wav)
-            #output = funct.wav_to_db(output)
+            # Get uncompressed waveform
+            fileinfo = (fileinfo[0][0], fileinfo[1].item())
+            uncomp_wav = test_funct.process_wav(uncomp_path, fileinfo, batch_size != 1, is_input=False)  
+
+            # Convert input and label for loss calculation
+            comp_wav = torch.squeeze(comp_wav, dim=0)
+            comp_wav = test_funct.wav_to_mel_db(comp_wav)
+            uncomp_wav = test_funct.wav_to_mel_db(uncomp_wav)
+            #comp_wav = test_funct.wav_to_pow_db(comp_wav)
+            #uncomp_wav = test_funct.wav_to_pow_db(uncomp_wav)
+            #comp_wav = funct.wav_to_db(comp_wav)
             #uncomp_wav = funct.wav_to_db(uncomp_wav)
-            #output = funct.upsample(output, uncomp_wav.shape[2])
+            #comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
 
-            # Compute the loss value: this measures how well the predicted outputs match the true labels
-            loss = criterion(output, uncomp_wav)
+            # Compute the loss value: this measures how well the predicted comp_wavs match the true labels
+            loss = criterion(comp_wav, uncomp_wav)
 
             # Calculate accuracy 
-            acc = torch.sum(torch.logical_and((output > uncomp_wav-acc_bound), (output < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
+            acc = torch.sum(torch.logical_and((comp_wav > uncomp_wav-acc_bound), (comp_wav < uncomp_wav+acc_bound)))/torch.numel(uncomp_wav)
+
+            # Step scheduler and log model output after small_test_size batches
+            if(i == small_test_size-1):
+                scheduler.step(avg_test_loss)
+                run.track(Audio(comp_wav), name='outputs', step=epoch+1, epoch=epoch+1, context={ "subset":"test" })
+        
+            # Explicitly delete tensors so they don't stay in memory
+            del comp_wav
+            del uncomp_wav
 
             # Add loss and accuracy to totals
-            tot_loss += loss.item()
-            tot_acc += acc
+            tot_test_loss += loss.item()
+            tot_test_acc += acc
 
             # Calculate average loss and accuracy so far
-            avg_loss = tot_loss/(i+1)
-            avg_acc = tot_acc/(i+1)
+            avg_test_loss = tot_test_loss/(i+1)
+            avg_test_acc = tot_test_acc/(i+1)
 
             # Log loss to aim
-            run.track(loss, name='loss', step=1, epoch=epoch+1, context={ "subset":"test" })
-            run.track(loss, name='acc', step=0.01, epoch=epoch+1, context={ "subset":"test" })
-        
+            run.track(loss, name='loss', step=test_step, epoch=epoch+1, context={ "subset":"test" })
+            run.track(acc, name='acc', step=test_step, epoch=epoch+1, context={ "subset":"test" })
+
+            # Increment step for next aim log
+            test_step = test_step + 1
+
             # Update tqdm progress bar with fixed number of decimals for loss
-            pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Average Loss": f"{avg_loss:.4f}", "Accuracy": f"{acc:.4f}", "Average Accuracy": f"{avg_acc:.4f}"})
+            test_pbar.set_postfix({"Loss": f"{loss.item():.4f}", "Avg Loss": f"{avg_test_loss:.4f}", "Acc": f"{acc:.4f}", "Avg Acc": f"{avg_test_acc:.4f}"})
 
-            # Explicitly delete tensors so they don't stay in used memory
-            del uncomp_wav
-            del output
+        # Log average test loss and accuracy and last model output to Aim
+        run.track(avg_test_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, context={ "subset":"test" })
+        run.track(avg_test_acc, name='avg_acc', step=epoch+1, epoch=epoch+1, context={ "subset":"test" })
 
-        # Log average loss to aim
-        run.track(avg_loss, name='avg_loss', step=1, epoch=epoch+1, context={ "subset":"test" })
-        run.track(avg_loss, name='avg_acc', step=0.01, epoch=epoch+1, context={ "subset":"test" })
-
-    # Reduced learning rate or stop training if average validation loss increased
-    if(avg_loss > last_avg_loss and avg_acc < last_avg_acc):
-        if(prev_model != None):
-            learning_rate = learning_rate/10
-            optimizer = optim.Adam(model.parameters(), lr=learning_rate, weight_decay=weight_decay)
-            print(f"Validation loss increased and accuracy decreased, reducing learning rate to {learning_rate} and loading \"{prev_model}\"")
-            model.load_state_dict(torch.load(prev_model))
-            prev_model=None
-        else:
-            print("Validation loss increased and accuracy decreased, force quitting training")
-            break
-    else:
-        # Save average loss and accuracy
-        last_avg_loss = avg_loss
-        last_avg_acc = avg_acc
-
-        # Save model after every epoch with reduced validation loss
-        prev_model = results_path+f"model{(epoch+1):02d}.pth"
-        torch.save(model.state_dict(), prev_model)
+    # Save model and optimizer states
+    torch.save(model.state_dict(), results_path+f"model{(epoch+1):02d}.pth")
+    torch.save(optimizer.state_dict(), results_path+f"optimizer{(epoch+1):02d}.pth")
+    torch.save(scheduler.state_dict(), results_path+f"scheduler{(epoch+1):02d}.pth")
 
 print("Finished Training")
