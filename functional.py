@@ -42,13 +42,13 @@ class Functional():
         amp_to_db = amp_to_db.to(self.device)
         return amp_to_db(tensor)
 
-    def compute_std_mean(self, tensor):
+    def compute_std_mean(self, tensor, top_db=80):
         # Convert input to complex spectrogram
         x = self.wav_to_complex(tensor)
 
         # Calculate magnitude of complex spectrogram
         x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
-        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
+        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         x = amp_to_db(x)
 

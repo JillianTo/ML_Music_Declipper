@@ -10,16 +10,17 @@ import torchaudio.functional as F
 import torchaudio.transforms as T
 
 # Parameters
-#path = "/mnt/MP600/data/comp/small/test/"
+#path = "/mnt/MP600/data/comp/small/declipTest/"
 path = "/mnt/MP600/data/comp/declipTest/"
-weights_path = "/mnt/MP600/data/results/test/model01.pth"
+#weights_path = "/mnt/MP600/data/results/test/model18.pth"
+weights_path = "/mnt/MP600/data/results/model01.pth"
 output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
 sample_rate = 44100
 #mean = -7.5930
 #std = 16.4029
 mean = -9.0133
 std = 14.3514 
-spectrogram_autoencoder = False
+spectrogram_autoencoder = True
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -33,8 +34,8 @@ device = "cpu"
 print(f"Using {device} device")
 
 # Get files to declip
-#funct = Functional(sample_rate, 9500000, device)
-funct = Functional(sample_rate, 20000000, device)
+#funct = Functional(sample_rate, 9200000, device)
+funct = Functional(sample_rate, 20000000, device, n_fft=2048)
 dataset = AudioDataset(funct, path, None, same_time=False, pad_thres=999)
 
 # Initialize model with pre-trained weights
@@ -59,18 +60,14 @@ with torch.no_grad():
         #phase[tensor.real < 0] += 3.14159265358979323846264338
         # Calculate magnitude of complex spectrogram
         #tensor = torch.sqrt(torch.pow(tensor.real, 2)+torch.pow(tensor.imag,2))
-        #print(torch.min(tensor))
-        #print(torch.max(tensor))
-        #amp_to_db = T.AmplitudeToDB(stype='magnitude', top_db=8,0)
+        #amp_to_db = T.AmplitudeToDB(stype='magnitude', top_db=80)
         #amp_to_db = amp_to_db.to(device)
         #tensor = amp_to_db(tensor)
-        #print(torch.min(tensor))
-        #print(torch.max(tensor))
         #tensor = F.DB_to_amplitude(tensor, 1, 0.5)
         #tensor = torch.polar(tensor, phase)
-        #inv_spec = T.InverseSpectrogram(n_fft=4096)
+        #inv_spec = T.InverseSpectrogram(n_fft=2048)
         #inv_spec = inv_spec.to(device)
-        #output = inv_spec(tensor)
+        #tensor = inv_spec(tensor)
 
         tensor = torch.unsqueeze(tensor, 0)
         tensor = model(tensor)
