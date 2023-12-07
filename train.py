@@ -20,16 +20,14 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.00002,
-    "batch_size": 2,
+    "learning_rate": 0.0001,
+    "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 100, 
     #"mean": -7.5930,
     #"std": 16.4029, 
-    #"mean": -8.9372,
-    #"std": 14.4010, 
-    "mean": -9.0133,
-    "std": 14.3514, 
+    "mean": -8.6253,
+    "std": 14.3789, 
     #"mean": None,
     #"std": None, 
     "stats_compute_stop": None,
@@ -60,10 +58,9 @@ run["hparams"] = {
     "accuracy_bound": 0.01,
     "save_partial_epoch": True,
     "scheduler_state": 0,
-    "scheduler_changes": 1,
-    "scheduler_factors": [(1/2), 0.1],
-    "scheduler_patiences": [1, 2],
-    "test_points": [0.02, 0.05],
+    "scheduler_factors": [0.5, 0.2, 0.1],
+    "scheduler_patiences": [0, 1, 2],
+    "test_points": [0.01, 0.02, 0.05],
 }
 
 # Save run parameters to variables for easier access
@@ -85,7 +82,6 @@ preload_sch_path = run["hparams", "preload_scheduler_path"]
 acc_bound = run["hparams", "accuracy_bound"]
 save_partial_epoch = run["hparams", "save_partial_epoch"]
 sch_state = run["hparams", "scheduler_state"]
-sch_change = run["hparams", "scheduler_changes"]
 factors = run["hparams", "scheduler_factors"]
 patiences = run["hparams", "scheduler_patiences"]
 test_points = run["hparams", "test_points"]
@@ -180,7 +176,7 @@ if preload_sch_path != None:
 #criterion = nn.MSELoss()
 #fft_sizes = [4096, 8192, 16384]
 fft_sizes = [2048, 4096, 8192]
-criterion = auraloss.freq.SumAndDifferenceSTFTLoss(fft_sizes=fft_sizes, hop_sizes=[fft_size//2 for fft_size in fft_sizes], win_lengths=fft_sizes, sample_rate=sample_rate, perceptual_weighting=True, scale='mel', n_bins=64)
+criterion = auraloss.freq.SumAndDifferenceSTFTLoss(fft_sizes=fft_sizes, hop_sizes=[fft_size//4 for fft_size in fft_sizes], win_lengths=fft_sizes, sample_rate=sample_rate, perceptual_weighting=True, scale='mel', n_bins=64)
 criterion.to(device)
 
 # Steps needed for loss and acc plotting in aim
@@ -199,6 +195,9 @@ small_test_size = int(len(testloader)*0.05)
 
 # Do not run small test ff learning rate will not be reduced by more than scheduler EPS
 run_small_test = (optimizer.param_groups[0]['lr']*(1-scheduler.factor) > scheduler.eps)
+
+# Last time scheduler parameters will be changed
+sch_change = len(factors)-1
 
 # Training Loop
 print("\nStarting training loop...")
@@ -246,6 +245,9 @@ for epoch in range(run["hparams", "num_epochs"]):
         # Backward pass: compute the gradient of the loss with respect to model parameters
         loss.backward()
 
+        # Clip gradients
+        nn.utils.clip_grad_norm_(parameters=model.parameters(), max_norm=10, norm_type=2)
+
         # Update the model's parameters using the optimizer's step method
         optimizer.step()
 
@@ -265,7 +267,7 @@ for epoch in range(run["hparams", "num_epochs"]):
         avg_acc = tot_acc/(i+1)
 
         # Log loss to aim
-        run.track(loss, name='loss', step=train_step, epoch=epoch+1, context={ "subset":"train" })
+        run.track(loss.item(), name='loss', step=train_step, epoch=epoch+1, context={ "subset":"train" })
         run.track(acc, name='acc', step=train_step, epoch=epoch+1, context={ "subset":"train" })
 
         # Update tqdm progress bar with fixed number of decimals for loss
@@ -330,7 +332,7 @@ for epoch in range(run["hparams", "num_epochs"]):
                             avg_test_acc = tot_test_acc/(i+1)
 
                             # Log loss to aim
-                            run.track(loss, name='loss', step=small_test_step, epoch=epoch+1, context={ "subset":"small_test" })
+                            run.track(loss.item(), name='loss', step=small_test_step, epoch=epoch+1, context={ "subset":"small_test" })
                             run.track(acc, name='acc', step=small_test_step, epoch=epoch+1, context={ "subset":"small_test" })
                         
                             # Increment step for next aim log
@@ -437,7 +439,7 @@ for epoch in range(run["hparams", "num_epochs"]):
             avg_test_acc = tot_test_acc/(i+1)
 
             # Log loss to aim
-            run.track(loss, name='loss', step=test_step, epoch=epoch+1, context={ "subset":"test" })
+            run.track(loss.item(), name='loss', step=test_step, epoch=epoch+1, context={ "subset":"test" })
             run.track(acc, name='acc', step=test_step, epoch=epoch+1, context={ "subset":"test" })
 
             # Increment step for next aim log

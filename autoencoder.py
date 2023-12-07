@@ -5,13 +5,14 @@ import torchaudio.functional as F
 import torchaudio.transforms as T
 
 class SpecAutoEncoder(nn.Module):
-    def __init__(self, device, mean, std, n_fft=4096, in_channels=2, first_out_channels=64, kernel_size=(3,3), up_kernel_size=(2,2), stride=(1,1), up_stride=(1,1), dropout=0.2):
+    def __init__(self, device, mean, std, n_fft=4096, hop_length=1024, in_channels=2, first_out_channels=64, kernel_size=(3,3), up_kernel_size=(2,2), stride=(1,1), up_stride=(1,1), dropout=0.2):
         super(SpecAutoEncoder, self).__init__(),
 
         self.device=device
         self.mean=mean
         self.std=std
         self.n_fft=n_fft
+        self.hop_length=hop_length
 
         # First encoder layer
         self.enc1 = nn.Sequential(
@@ -133,7 +134,7 @@ class SpecAutoEncoder(nn.Module):
         upsample = upsample.to(self.device)
 
         # Convert input to complex spectrogram
-        complex_spec = T.Spectrogram(n_fft=self.n_fft, power=None)
+        complex_spec = T.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, power=None)
         complex_spec = complex_spec.to(self.device)
         x = complex_spec(x)
 
@@ -214,7 +215,7 @@ class SpecAutoEncoder(nn.Module):
         x = F.DB_to_amplitude(x, 1, 0.5)
 
         x = torch.polar(x, phase)
-        inv_spec = T.InverseSpectrogram(n_fft=self.n_fft)
+        inv_spec = T.InverseSpectrogram(n_fft=self.n_fft, hop_length=self.hop_length)
         inv_spec = inv_spec.to(self.device)
         x = inv_spec(x)
         x = upsample(x)
