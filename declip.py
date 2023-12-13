@@ -10,17 +10,16 @@ import torchaudio.functional as F
 import torchaudio.transforms as T
 
 # Parameters
-#path = "/mnt/MP600/data/comp/small/declipTest/"
-#path = "/mnt/MP600/data/comp/declipTest/"
 path = "/mnt/MP600/data/comp/declip/"
-#weights_path = "/mnt/MP600/data/results/test/model18.pth"
-weights_path = "/mnt/MP600/data/results/model03.pth"
+weights_path = "/mnt/MP600/data/results/model01.pth"
 output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
 sample_rate = 44100
 #mean = -7.5930
 #std = 16.4029
-mean = -8.6253
-std = 14.3789
+#mean = -8.6253
+#std = 14.3789
+mean = -7.6415
+std = 14.3662
 spectrogram_autoencoder = True
 
 # Get CPU, GPU, or MPS device for inference
@@ -36,7 +35,7 @@ print(f"Using {device} device")
 
 # Get files to declip
 #funct = Functional(sample_rate, 9200000, device)
-funct = Functional(sample_rate, 10050000, device, n_fft=4096)
+funct = Functional(sample_rate, 10075000, device, n_fft=4096)
 dataset = AudioDataset(funct, path, None, same_time=False, pad_thres=999)
 
 # Initialize model with pre-trained weights

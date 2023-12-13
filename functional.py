@@ -155,7 +155,8 @@ class Functional():
         # Load waveform
         filename = fileinfo[0]
         if(not is_input):
-            filename = filename.replace(".flac-compressed-", "")
+            filename = filename.replace("-compressed.medium-", "")
+            filename = filename.replace("-compressed.hard-", "")
 
         wav_path = path + filename
         wav, sample_rate = torchaudio.load(wav_path)
@@ -180,7 +181,8 @@ class Functional():
         filename = fileinfo[0]
         input_wav_path = input_path + filename
         input_wav, input_sample_rate = torchaudio.load(input_wav_path)
-        label_wav_path = label_path + filename.replace(".flac-compressed-", "")
+        label_wav_path = label_path + filename.replace("-compressed.medium-", "")
+        label_wav_path = label_path + filename.replace("-compressed.hard-", "")
         label_wav, label_sample_rate = torchaudio.load(label_wav_path)
 
         # Move waveforms to device
