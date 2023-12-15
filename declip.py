@@ -11,13 +11,9 @@ import torchaudio.transforms as T
 
 # Parameters
 path = "/mnt/MP600/data/comp/declip/"
-weights_path = "/mnt/MP600/data/results/model01.pth"
-output_path = "/home/jto/Documents/AIDeclip/AIDeclipper/"
+weights_path = "/mnt/MP600/data/results/12-08/model01.pth"
+output_path = "/mnt/MP600/AIDeclip/AIDeclipper/"
 sample_rate = 44100
-#mean = -7.5930
-#std = 16.4029
-#mean = -8.6253
-#std = 14.3789
 mean = -7.6415
 std = 14.3662
 spectrogram_autoencoder = True
@@ -34,8 +30,7 @@ device = "cpu"
 print(f"Using {device} device")
 
 # Get files to declip
-#funct = Functional(sample_rate, 9200000, device)
-funct = Functional(sample_rate, 10075000, device, n_fft=4096)
+funct = Functional(sample_rate, 7250000, device, n_fft=4096)
 dataset = AudioDataset(funct, path, None, same_time=False, pad_thres=999)
 
 # Initialize model with pre-trained weights
@@ -46,7 +41,8 @@ else:
     model = WavAutoEncoder(device)
     print("Using waveform autoencoder")
 model.to(device)
-model.load_state_dict(torch.load(weights_path, map_location=torch.device(device)))
+model.load_state_dict(torch.load(weights_path, 
+                                 map_location=torch.device(device)))
 model.eval()
 
 with torch.no_grad():
@@ -54,28 +50,13 @@ with torch.no_grad():
     for tensor, fileinfo in dataset:
         tensor = tensor.to(device)
 
-        #tensor = funct.wav_to_complex(tensor)
-        # Calculate phase of complex spectrogram
-        #phase = torch.atan(tensor.imag/(tensor.real+1e-7))
-        #phase[tensor.real < 0] += 3.14159265358979323846264338
-        # Calculate magnitude of complex spectrogram
-        #tensor = torch.sqrt(torch.pow(tensor.real, 2)+torch.pow(tensor.imag,2))
-        #amp_to_db = T.AmplitudeToDB(stype='magnitude', top_db=80)
-        #amp_to_db = amp_to_db.to(device)
-        #tensor = amp_to_db(tensor)
-        #tensor = F.DB_to_amplitude(tensor, 1, 0.5)
-        #tensor = torch.polar(tensor, phase)
-        #inv_spec = T.InverseSpectrogram(n_fft=2048)
-        #inv_spec = inv_spec.to(device)
-        #tensor = inv_spec(tensor)
-
         tensor = torch.unsqueeze(tensor, 0)
         tensor = model(tensor)
         tensor = torch.squeeze(tensor)
 
         funct.save_wav(tensor, output_path+f"{i}"+fileinfo[0])
         print(f"Saved \"{output_path}{i}{fileinfo[0]}\"")
-        i = i+1
+        i += 1
 
         # Explicitly delete tensor so it doesn't stay in memory
         del tensor
