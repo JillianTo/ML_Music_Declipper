@@ -215,14 +215,14 @@ sdstft = auraloss.freq.SumAndDifferenceSTFTLoss(fft_sizes=fft_sizes,
                                                 perceptual_weighting=True, 
                                                 scale='mel', n_bins=64)
 sdstft.to(device)
-mrstft = auraloss.freq.SumAndDifferenceSTFTLoss(fft_sizes=fft_sizes, 
-                                                hop_sizes=[fft_size//4 for 
-                                                           fft_size in 
-                                                           fft_sizes], 
-                                                win_lengths=fft_sizes, 
-                                                sample_rate=sample_rate, 
-                                                perceptual_weighting=True, 
-                                                scale='mel', n_bins=64)
+mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
+                                               hop_sizes=[fft_size//4 for 
+                                                          fft_size in 
+                                                          fft_sizes], 
+                                               win_lengths=fft_sizes, 
+                                               sample_rate=sample_rate, 
+                                               perceptual_weighting=True, 
+                                               scale='mel', n_bins=64)
 mrstft.to(device)
 
 # Steps needed for loss and acc plotting in Aim
@@ -245,15 +245,11 @@ small_test_end = int(((len(trainloader)*(max_time/test_max_time))
 step_sch = (optimizer.param_groups[0]['lr'] * (1-scheduler.factor) 
             > scheduler.eps)
 
-# Don't include outliers in small test
-exclude_thres = small_test_end * 0.1
-excl_small_test = []
-
 # Last time scheduler parameters will be changed
 sch_change = len(factors) - 1
 
 # Get normalized gradient history
-grad_history = []
+#grad_history = []
 
 # Training Loop
 print("\nStarting training loop...")
@@ -360,157 +356,138 @@ for epoch in range(run["hparams", "num_epochs"]):
             train_step = train_step + 1
 
             # If training has completed for test_point number of batches
-            if(save_partial_epoch):
-                if(i%test_point == 0 and i < last_test_point and i > 0):
-                    if(step_sch):
-                        # Small testing phase
-                        model.eval()
-                        with torch.no_grad():
-                            tot_test_loss = 0
-                            tot_test_acc = 0
-                            avg_test_loss = 0
-                            avg_test_acc = 0
-                            test_pbar = tqdm(enumerate(testloader), 
-                                             total=small_test_end+1, 
-                                             desc=f"Small Test Epoch "
-                                             f"{scheduler.last_epoch+1}")
-                            for i, (comp_wav, fileinfo) in test_pbar:
-                                # Stop small test after small_test_end batches
-                                if(i > small_test_end):
-                                    break
+            if(save_partial_epoch and i%test_point == 0 and i < last_test_point 
+               and i > 0):
+                if(step_sch):
+                    # Small testing phase
+                    model.eval()
+                    with torch.no_grad():
+                        tot_test_loss = 0
+                        tot_test_acc = 0
+                        avg_test_loss = 0
+                        avg_test_acc = 0
+                        test_pbar = tqdm(enumerate(testloader), 
+                                         total=small_test_end+1, 
+                                         desc=f"Small Test Epoch "
+                                         f"{scheduler.last_epoch+1}")
+                        for i, (comp_wav, fileinfo) in test_pbar:
+                            # Stop small test after small_test_end batches
+                            if(i > small_test_end):
+                                break
 
-                                # Don't add current loss to small test average
-                                # if current index is in list of outliers
-                                if(not i in excl_small_test):
-                                    # Forward pass
-                                    comp_wav = model(comp_wav)
+                            # Forward pass
+                            comp_wav = model(comp_wav)
 
-                                    # Get uncompressed waveform
-                                    if(test_batch_size > 1):
-                                        uncomp_wav = fileinfo
-                                    else:
-                                        fileinfo = (fileinfo[0][0], 
-                                                    fileinfo[1].item())
-                                        uncomp_wav = test_funct.process_wav(
-                                                label_path, fileinfo, 
-                                                test_batch_size != 1, 
-                                                is_input=False)  
-                                        uncomp_wav = torch.unsqueeze(uncomp_wav, 
-                                                                     dim=0)
-                                        # Make sure input waveform is same 
-                                        # length as label
-                                        if(uncomp_wav.shape[2] != 
-                                           comp_wav.shape[2]):
-                                            print(f"{fileinfo[0][0]} "
-                                                  "mismatched size, input is "
-                                                  f"{comp_wav.shape[2]} and "
-                                                  "label is "
-                                                  f"{uncomp_wav.shape[2]}")
-                                            comp_wav = funct.upsample(comp_wav, 
-                                                    uncomp_wav.shape[2])
+                            # Get uncompressed waveform
+                            if(test_batch_size > 1):
+                                uncomp_wav = fileinfo
+                            else:
+                                fileinfo = (fileinfo[0][0], fileinfo[1].item())
+                                uncomp_wav = test_funct.process_wav(
+                                        label_path, fileinfo, 
+                                        test_batch_size != 1, 
+                                        is_input=False)  
+                                uncomp_wav = torch.unsqueeze(uncomp_wav, 
+                                                             dim=0)
+                                # Make sure input waveform is same 
+                                # length as label
+                                if(uncomp_wav.shape[2] != 
+                                   comp_wav.shape[2]):
+                                    print(f"{fileinfo[0][0]} mismatched size, "
+                                          f"input is {comp_wav.shape[2]} and "
+                                          f"label is {uncomp_wav.shape[2]}")
+                                    comp_wav = funct.upsample(comp_wav, 
+                                            uncomp_wav.shape[2])
 
-                                    # Measure how well the prediction matches 
-                                    # the true label
-                                    # If left and right channels are the same, 
-                                    # don't use sum and difference loss 
-                                    if(torch.equal(uncomp_wav[:, 0, :], 
-                                                   uncomp_wav[:, 1, :])):
-                                        loss = mrstft(comp_wav, uncomp_wav)
-                                    else:
-                                        loss = sdstft(comp_wav, uncomp_wav)
+                            # Measure how well the prediction matches the true
+                            # label
+                            # If left and right channels are the same, don't 
+                            # use sum and difference loss 
+                            if(torch.equal(uncomp_wav[:, 0, :], 
+                                           uncomp_wav[:, 1, :])):
+                                loss = mrstft(comp_wav, uncomp_wav)
+                            else:
+                                loss = sdstft(comp_wav, uncomp_wav)
 
-                                    # Don't include outliers in small test
-                                    if(scheduler.last_epoch < 1 and loss.item() 
-                                       > exclude_thres):
-                                        print(f"{fileinfo} with "
-                                              f"{loss.item():.4f} "
-                                              "loss to be excluded from small "
-                                              "test")
-                                        small_test_end += 1
-                                        excl_small_test.append(i)
-                                    else: 
-                                        # Calculate accuracy 
-                                        acc = (torch.sum(torch.logical_and(
-                                            (comp_wav > uncomp_wav-acc_bound), 
-                                            (comp_wav < uncomp_wav+acc_bound))) 
-                                               / torch.numel(uncomp_wav))
+                            # Calculate accuracy 
+                            acc = (torch.sum(torch.logical_and(
+                                (comp_wav > uncomp_wav-acc_bound), 
+                                (comp_wav < uncomp_wav+acc_bound))) 
+                                   / torch.numel(uncomp_wav))
 
-                                        # Explicitly delete tensors so they
-                                        # don't stay in memory
-                                        del comp_wav
-                                        del uncomp_wav
+                            # Explicitly delete tensors so theydon't stay in 
+                            # memory
+                            del comp_wav
+                            del uncomp_wav
 
-                                        # Add loss and accuracy to totals
-                                        tot_test_loss += loss.item()
-                                        tot_test_acc += acc
+                            # Add loss and accuracy to totals
+                            tot_test_loss += loss.item()
+                            tot_test_acc += acc
 
-                                        # Log loss to Aim
-                                        run.track(loss.item(), name='loss', 
-                                                  step=small_test_step, 
-                                                  epoch=epoch+1, 
-                                                  context=
-                                                  {"subset":"small_test"})
-                                        run.track(acc, name='acc', 
-                                                  step=small_test_step, 
-                                                  epoch=epoch+1, 
-                                                  context=
-                                                  {"subset":"small_test"})
-                                    
-                                        # Increment step for next Aim log
-                                        small_test_step += 1
+                            # Calculate current average loss and accuracy
+                            avg_test_loss = tot_test_loss / (i+1)
+                            avg_test_acc = tot_test_acc / (i+1)
 
-                                        # Update tqdm progress bar with fixed 
-                                        # number of decimals for loss
-                                        test_pbar.set_postfix(
-                                                {"Loss": f"{loss.item():.4f}", 
-                                                 "Acc": f"{acc:.4f}"})
+                            # Log loss to Aim
+                            run.track(loss.item(), name='loss', 
+                                      step=small_test_step, 
+                                      epoch=epoch+1, 
+                                      context=
+                                      {"subset":"small_test"})
+                            run.track(acc, name='acc', 
+                                      step=small_test_step, 
+                                      epoch=epoch+1, 
+                                      context=
+                                      {"subset":"small_test"})
+                        
+                            # Increment step for next Aim log
+                            small_test_step += 1
 
-                        # Calculate average test loss and accuracy
-                        avg_test_loss = tot_test_loss / (small_test_end+1
-                                                         -len(excl_small_test))
-                        avg_test_acc = tot_test_acc / (small_test_end+1
-                                                       -len(excl_small_test))
+                            # Update tqdm progress bar with fixed 
+                            # number of decimals for loss
+                            test_pbar.set_postfix(
+                                    {"Loss": f"{loss.item():.4f}", 
+                                     "Acc": f"{acc:.4f}",
+                                     "Avg_Loss": f"{avg_test_loss:.4f}", 
+                                     "Avg_Acc": f"{avg_test_acc:.4f}"})
 
-                        # Send average training loss to scheduler
-                        scheduler.step(avg_test_loss)
+                    # Send average training loss to scheduler
+                    scheduler.step(avg_test_loss)
 
-                        # Log average test loss and accuracy to Aim and 
-                        # terminal
-                        run.track(avg_test_loss, name='avg_loss', 
-                                  step=scheduler.last_epoch, epoch=epoch+1, 
-                                  context={"subset":"small_test"})
-                        run.track(avg_test_acc, name='avg_acc', 
-                                  step=scheduler.last_epoch, epoch=epoch+1, 
-                                  context={"subset":"small_test"})
-                        print(f"Small Test Epoch {scheduler.last_epoch}: "
-                              f"Avg_Loss={avg_test_loss:.4f}, "
-                              f"Avg_Acc={avg_test_acc:.4f}")
+                    # Log average test loss and accuracy to Aim and 
+                    # terminal
+                    run.track(avg_test_loss, name='avg_loss', 
+                              step=scheduler.last_epoch, epoch=epoch+1, 
+                              context={"subset":"small_test"})
+                    run.track(avg_test_acc, name='avg_acc', 
+                              step=scheduler.last_epoch, epoch=epoch+1, 
+                              context={"subset":"small_test"})
 
-                        # Check if learning rate was changed
-                        if(optimizer.param_groups[0]['lr'] < learning_rate):
-                            # Save current learning rate
-                            learning_rate = optimizer.param_groups[0]['lr']
-                            # Change scheduler parameters after learning rate 
-                            # reduction
-                            if(sch_state < sch_change):
-                                sch_state = sch_state + 1
-                                scheduler.factor = factors[sch_state]
-                                scheduler.patience = patiences[sch_state]
-                                test_point = int(len(training_data)
-                                                 * test_points[sch_state])
-                            # If learning rate will not be reduced by more than 
-                            # scheduler EPS, then do not run small test anymore
-                            if(not (learning_rate*(1-scheduler.factor)
-                                    > scheduler.eps)):
-                                step_sch = False
+                    # Check if learning rate was changed
+                    if(optimizer.param_groups[0]['lr'] < learning_rate):
+                        # Save current learning rate
+                        learning_rate = optimizer.param_groups[0]['lr']
+                        # Change scheduler parameters after learning rate 
+                        # reduction
+                        if(sch_state < sch_change):
+                            sch_state = sch_state + 1
+                            scheduler.factor = factors[sch_state]
+                            scheduler.patience = patiences[sch_state]
+                            test_point = int(len(training_data)
+                                             * test_points[sch_state])
+                        # If learning rate will not be reduced by more than 
+                        # scheduler EPS, then do not run small test anymore
+                        if(not (learning_rate*(1-scheduler.factor)
+                                > scheduler.eps)):
+                            step_sch = False
 
-                    # Save model and optimizer states
-                    torch.save(model.state_dict(), results_path 
-                               +f"model{(epoch+1):02d}.pth")
-                    torch.save(optimizer.state_dict(), results_path 
-                               +f"optimizer{(epoch+1):02d}.pth")
-                    torch.save(scheduler.state_dict(), results_path 
-                               +f"scheduler{(epoch+1):02d}.pth")
+                # Save model and optimizer states
+                torch.save(model.state_dict(), results_path 
+                           +f"model{(epoch+1):02d}.pth")
+                torch.save(optimizer.state_dict(), results_path 
+                           +f"optimizer{(epoch+1):02d}.pth")
+                torch.save(scheduler.state_dict(), results_path 
+                           +f"scheduler{(epoch+1):02d}.pth")
 
         # Log average training loss to Aim
         run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
@@ -523,11 +500,8 @@ for epoch in range(run["hparams", "num_epochs"]):
     with torch.no_grad():
         tot_loss = 0
         tot_acc = 0
-        tot_stest_loss = 0
-        tot_clip_loss = 0
         avg_loss = 0
         avg_acc = 0
-        num_outliers = 0
         pbar = tqdm(enumerate(testloader), total=len(testloader), 
                     desc=f"Test Epoch {epoch+1}")
         for i, (comp_wav, fileinfo) in pbar:
@@ -568,15 +542,8 @@ for epoch in range(run["hparams", "num_epochs"]):
             # Step scheduler and log model output after small_test_end batches
             if(i == small_test_end and save_partial_epoch):
                 if(step_sch):
-                    # Calculate average small test loss
-                    avg_stest_loss = (tot_stest_loss 
-                                      / (small_test_end+1
-                                         -len(excl_small_test)))
                     # Send average small test loss to scheduler
-                    scheduler.step(avg_stest_loss)
-                    # Print average small test loss to terminal
-                    print(f"Small Test Epoch {scheduler.last_epoch}: " 
-                          f"Avg_Loss={avg_stest_loss:.4f}")
+                    scheduler.step(avg_loss)
                     # Check if learning rate was changed
                     if(optimizer.param_groups[0]['lr'] < learning_rate):
                         # Save current learning rate
@@ -602,12 +569,6 @@ for epoch in range(run["hparams", "num_epochs"]):
             # Add loss and accuracy to totals
             tot_loss += loss.item()
             tot_acc += acc
-            if(not i in excl_small_test):
-                tot_stest_loss += loss.item()
-            if(loss.item() < 60):
-                tot_clip_loss += loss.item()
-            else:
-                num_outliers += 1
 
             # Calculate average loss and accuracy so far
             avg_loss = tot_loss / (i+1)
@@ -663,7 +624,5 @@ for epoch in range(run["hparams", "num_epochs"]):
               context={"subset":"test"})
     run.track(avg_acc, name='avg_acc', step=epoch+1, epoch=epoch+1, 
               context={ "subset":"test" })
-    print(f"Average loss without {num_outliers} outliers: "
-          f"{tot_clip_loss / (i+1-num_outliers):.4f}")
    
 print("Finished Training")
