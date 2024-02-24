@@ -17,7 +17,8 @@ class Functional():
         self.n_fft = n_fft
 
     def wav_to_mel_db(self, tensor, n_mels=64, top_db=80):
-        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, f_max=self.sample_rate>>1, n_mels=n_mels)
+        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, 
+                               f_max=self.sample_rate>>1, n_mels=n_mels)
         mel = mel.to(self.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
@@ -72,13 +73,19 @@ class Functional():
         # Calculate maximum and minimum
         return torch.max(x), torch.min(x)
 
+    def sum(self, tensor):
+        tensor = tensor[:,0,:] + tensor[:,1,:]  
+        tensor = tensor.unsqueeze(1)
+        return tensor
+
     def upsample(self, tensor, time):
         upsampler = nn.Upsample(time)
         upsampler = upsampler.to(self.device)
         return upsampler(tensor)
 
     def resample(self, tensor, old_sample_rate):
-        resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=tensor.dtype)
+        resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=
+                               tensor.dtype)
         resampler = resampler.to(self.device)
         return resampler(tensor)
 
@@ -88,7 +95,8 @@ class Functional():
         right_pad = w_padding - left_pad
         return F.pad(tensor, (left_pad, right_pad))
 
-    def get_filelist(self, input_path, pad_thres, filelist_path):
+    def get_filelist(self, input_path, pad_thres, filelist_path, 
+                     overlap_factor):
         # Filelist was saved previously, load it
         if(filelist_path != None and os.path.isfile(filelist_path)):
             with open(filelist_path, 'rb') as f:
@@ -99,24 +107,37 @@ class Functional():
             filelist = []
 
             for filename in tqdm(os.listdir(input_path)):
-                time = torchaudio.info(input_path+filename).num_frames
-                # Waveform is longer than time cut-off, needs to be split
-                if(time > self.max_time):
-                    remainder = time % self.max_time
-                    # Round down number of parts to split
-                    num_parts = int(time/self.max_time)
-                    # Append filename and time start of each split part
-                    for i in range(0, num_parts):
-                        filelist.append([filename, self.max_time*i])
-                    # If remainder is greater than pad threshold, add waveform ending at end of file with length max_time
-                    if(remainder > (self.max_time/pad_thres)):
-                        filelist.append([filename, time-self.max_time])
-                # Waveform is shorter than or equal to time cut off and long enough for FFT, does not need to be split
-                elif(time > self.n_fft):
-                    filelist.append([filename, -1])
-                # Waveform not long enough for FFT, skip
-                else:
-                    print(f"Skipping \"{input_path}{filename}\" because too short for FFT")
+                if filename.endswith('.wav'):
+                    # TODO: this does not work for files not 44.1kHz samplerate
+                    time = torchaudio.info(input_path+filename).num_frames
+                    # Waveform is longer than time cut-off, needs to be split
+                    if(time > self.max_time):
+                        # Calculate time that parts will overlap
+                        if(overlap_factor == None):
+                            overlap_time = 0
+                        else:
+                            overlap_time = int(self.max_time/overlap_factor)
+                        # Calculate leftover of waveform after being parted out
+                        remainder = time % (self.max_time-overlap_time)
+                        # Round down number of parts to split
+                        num_parts = int(time/(self.max_time-overlap_time))
+                        # Append filename and time start of each split part
+                        filelist.append([filename, 0])
+                        for i in range(1, num_parts):
+                            filelist.append([filename, ((self.max_time*i)
+                                                        -(overlap_time*i))])
+                        # If remainder is greater than pad threshold, add 
+                        # waveform ending at end of file with length max_time
+                        if(remainder > (self.max_time/pad_thres)):
+                            filelist.append([filename, time-self.max_time])
+                    # Waveform is shorter than or equal to time cut off and 
+                    # long enough for FFT, does not need to be split
+                    elif(time > self.n_fft):
+                        filelist.append([filename, -1])
+                    # Waveform not long enough for FFT, skip
+                    else:
+                        print(f"Skipping \"{input_path}{filename}\" because too "
+                        "short for FFT")
 
             if(filelist_path != None):
                 with open(filelist_path, 'wb') as f:
@@ -146,7 +167,8 @@ class Functional():
                 # Return split part as-is if time is enough for FFT
                 elif(end_time > self.n_fft):
                     return tensor[:, split_start:]
-            # Split waveform fits in max_time, return waveform starting at time split_start with length max_time
+            # Split waveform fits in max_time, return waveform starting at 
+            # time split_start with length max_time
             else:
                 return tensor[:, split_start:split_start+self.max_time]
 
@@ -155,8 +177,8 @@ class Functional():
         # Load waveform
         filename = fileinfo[0]
         if(not is_input):
-            filename = filename.replace("-compressed.medium-", "")
-            filename = filename.replace("-compressed.hard-", "")
+            filename = filename.replace("-1-", "")
+            filename = filename.replace("-2-", "")
 
         wav_path = path + filename
         wav, sample_rate = torchaudio.load(wav_path)
@@ -181,8 +203,10 @@ class Functional():
         filename = fileinfo[0]
         input_wav_path = input_path + filename
         input_wav, input_sample_rate = torchaudio.load(input_wav_path)
-        label_wav_path = label_path + filename.replace("-compressed.medium-", "")
-        label_wav_path = label_path + filename.replace("-compressed.hard-", "")
+        label_wav_path = (label_path 
+                          + filename.replace("-1-", ""))
+        label_wav_path = (label_path 
+                          + filename.replace("-2-", ""))
         label_wav, label_sample_rate = torchaudio.load(label_wav_path)
 
         # Move waveforms to device
@@ -198,7 +222,8 @@ class Functional():
             #print(f"\"{label_wav_path}\" has sample rate of {label_sample_rate}Hz, resampling")
             label_wav = self.resample(label_wav, label_sample_rate)
 
-        # All DataLoader tensors should have the same time length if batch size > 1
+        # All DataLoader tensors should have the same time length if batch 
+        # size > 1
         split_start = fileinfo[1]
         input_wav = self.split(input_wav, split_start, same_time)
         label_wav = self.split(label_wav, split_start, same_time)

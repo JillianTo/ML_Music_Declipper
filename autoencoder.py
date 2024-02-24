@@ -5,17 +5,16 @@ import torchaudio.functional as F
 import torchaudio.transforms as T
 
 class SpecAutoEncoder(nn.Module):
-    def __init__(self, device, mean, std, n_fft=4096, hop_length=1024, 
+    def __init__(self, mean, std, n_fft=4096, hop_length=512, 
                  in_channels=2, first_out_channels=64, kernel_size=(3,3), 
                  up_kernel_size=(2,2), stride=(1,1), up_stride=(1,1), 
                  dropout=0.2):
         super(SpecAutoEncoder, self).__init__(),
 
-        self.device=device
-        self.mean=mean
-        self.std=std
-        self.n_fft=n_fft
-        self.hop_length=hop_length
+        self.mean = mean
+        self.std = std
+        self.n_fft = int(n_fft)
+        self.hop_length = hop_length
 
         # First encoder layer
         self.enc1 = nn.Sequential(
@@ -202,14 +201,16 @@ class SpecAutoEncoder(nn.Module):
         )
 
     def forward(self, x):
+        device = x.device
+
         # Save time shape of unedited input for upsampling later
         upsample = nn.Upsample(x.shape[2])
-        upsample = upsample.to(self.device)
+        upsample = upsample.to(device)
 
         # Convert input to complex spectrogram
-        complex_spec = T.Spectrogram(n_fft=self.n_fft, 
+        complex_spec = T.Spectrogram(n_fft=self.n_fft,
                                      hop_length=self.hop_length, power=None)
-        complex_spec = complex_spec.to(self.device)
+        complex_spec = complex_spec.to(device)
         x = complex_spec(x)
 
         # Calculate phase of complex spectrogram
@@ -219,7 +220,7 @@ class SpecAutoEncoder(nn.Module):
         # Calculate magnitude of complex spectrogram
         x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
         amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
-        amp_to_db = amp_to_db.to(self.device)
+        amp_to_db = amp_to_db.to(device)
         x = amp_to_db(x)
 
         # Standardize magnitude
@@ -244,6 +245,9 @@ class SpecAutoEncoder(nn.Module):
         x, _ = self.lstm(x)
         x = x.reshape(x.size(0), x.size(2), freq_dim, time_dim)
 
+        # Move input to device 1
+        x = x.to(device)
+
         # Decoder
         x = self.dec1(x)
         #dec_upsample = nn.Upsample(size=[e6.shape[2], e6.shape[3]])
@@ -257,29 +261,29 @@ class SpecAutoEncoder(nn.Module):
         #x = torch.cat((x, e5), dim=1)
         #x = self.dec3(x)
         dec_upsample = nn.Upsample(size=[e4.shape[2], e4.shape[3]])
-        dec_upsample = dec_upsample.to(self.device)
+        dec_upsample = dec_upsample.to(device)
         x = dec_upsample(x)
         x = torch.cat((x, e4), dim=1)
         x = self.dec4(x)
         dec_upsample = nn.Upsample(size=[e3.shape[2], e3.shape[3]])
-        dec_upsample = dec_upsample.to(self.device)
+        dec_upsample = dec_upsample.to(device)
         x = dec_upsample(x)
         x = torch.cat((x, e3), dim=1)
         x = self.dec5(x)
         dec_upsample = nn.Upsample(size=[e2.shape[2], e2.shape[3]])
-        dec_upsample = dec_upsample.to(self.device)
+        dec_upsample = dec_upsample.to(device)
         x = dec_upsample(x)
         x = torch.cat((x, e2), dim=1)
         x = self.dec6(x)
         dec_upsample = nn.Upsample(size=[e1.shape[2], e1.shape[3]])
-        dec_upsample = dec_upsample.to(self.device)
+        dec_upsample = dec_upsample.to(device)
         x = dec_upsample(x)
         x = torch.cat((x, e1), dim=1)
         x = self.dec7(x)
         
         # Upscale magnitude to match phase shape
         mag_upsample = nn.Upsample([phase.shape[2], phase.shape[3]])
-        mag_upsample = mag_upsample.to(self.device)
+        mag_upsample = mag_upsample.to(device)
         x = mag_upsample(x)
 
         # Unnormalize magnitude
@@ -291,9 +295,13 @@ class SpecAutoEncoder(nn.Module):
         x = torch.polar(x, phase)
         inv_spec = T.InverseSpectrogram(n_fft=self.n_fft, 
                                         hop_length=self.hop_length)
-        inv_spec = inv_spec.to(self.device)
+        inv_spec = inv_spec.to(device)
         x = inv_spec(x)
+
+        # Set output to same time length as original input
         x = upsample(x)
+        
+        # Return modified waveform
         return x
 
 # TODO: Needs work
