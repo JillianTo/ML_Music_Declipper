@@ -33,7 +33,7 @@ run["hparams"] = {
     "num_epochs": 100, 
     "mean": None,
     "std": None, 
-    #"mean": -1.1004,
+    #"mean": -0.4622,
     #"std": 13.9308, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
@@ -154,6 +154,7 @@ def main(rank, world_size):
         # Create samplers
         train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
         test_sampler = DistributedSampler(test_data, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
+        print("Using distributed samplers for training/testing data")
 
         # Create data loader for training data 
         trainloader = DataLoader(train_data, batch_size=batch_size, 

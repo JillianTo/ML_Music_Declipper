@@ -16,7 +16,10 @@ class Functional():
         self.device = device
         self.n_fft = n_fft
 
-    def wav_to_mel_db(self, tensor, n_mels=64, top_db=80):
+    def mean(self, tensor):
+        return torch.sum(tensor)/torch.numel(tensor)
+
+    def wav_to_mel_db(self, tensor, n_mels=128, top_db=80):
         mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, 
                                f_max=self.sample_rate>>1, n_mels=n_mels)
         mel = mel.to(self.device)
@@ -240,4 +243,5 @@ class Functional():
 
         # Save the output as a WAV file
         torchaudio.save(output_path, out, self.sample_rate)
+        print(f"Saved \"{output_path}\"")
 
