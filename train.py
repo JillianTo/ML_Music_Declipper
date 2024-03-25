@@ -4,6 +4,7 @@ from aim import Run, Audio
 import auraloss
 import numpy as np
 from tqdm import tqdm
+import pickle
 
 from audiodataset import AudioDataset
 from autoencoder import SpecAutoEncoder, WavAutoEncoder
@@ -31,28 +32,25 @@ run["hparams"] = {
     "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 100, 
-    "mean": None,
-    "std": None, 
-    #"mean": -0.4622,
-    #"std": 13.9308, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
+    #"uncompressed_data_path": "/mnt/MP600/data/small/uncomp/",
     "compressed_data_path": "/mnt/MP600/data/comp/train/",
-    #"compressed_data_path": "/mnt/MP600/data/comp/small/train/",
+    #"compressed_data_path": "/mnt/MP600/data/small/comp/train/",
     "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
-    #"test_compressed_data_path": "/mnt/MP600/data/comp/small/test/",
-    "results_path": "/mnt/MP600/data/results/",
-    "max_time": 1900000,
-    "test_max_time": 4000000,
+    #"test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
+    "results_path": "/mnt/PC801/declip/results/",
+    "max_time": 1907500,
+    "test_max_time": 4250000,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
     "spectrogram_autoencoder": True,
-    #"preload_weights_path": "/mnt/MP600/data/results/02-17/model02.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
     "preload_weights_path": None,
-    #"preload_optimizer_path": "/mnt/MP600/data/results/02-17/optimizer02.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer01.pth",
     "preload_optimizer_path": None,
-    #"preload_scheduler_path": "/mnt/MP600/data/results/02-16/scheduler05.pth",
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
     "preload_scheduler_path": None,
     "run_small_test": False,
     #"eps": 0.0000000001,
@@ -85,8 +83,6 @@ def cleanup():
 def main(rank, world_size):
     # Save run parameters to variables for easier access
     learning_rate = run["hparams", "learning_rate"]
-    mean = run["hparams", "mean"]
-    std = run["hparams", "std"]
     sample_rate = run["hparams", "expected_sample_rate"]
     batch_size = run["hparams", "batch_size"]
     test_batch_size = run["hparams", "test_batch_size"]
@@ -180,25 +176,34 @@ def main(rank, world_size):
                                 prefetch_factor=prefetch_factor)
 
     # Calculate mean and std for training set if not given
-    if(mean == None or std == None):
+    stats_path = "db_stats.txt"
+    if(os.path.isfile(stats_path)):
+        with open(stats_path, 'rb') as f:
+            db_stats = pickle.load(f)
+            mean = db_stats[0]
+            std = db_stats[1]
+    else:
         print("Calculating mean and std...")
         mean = 0
         std = 0
-        pbar = tqdm(enumerate(trainloader), total=len(trainloader), 
-                    desc=f"Train Mean and Standard Deviation")
+        total = len(trainloader)
+        pbar = tqdm(enumerate(trainloader), total=total, 
+                    desc=f"Train Stats")
 
         for i, (comp_wav, _) in pbar:
-            curr_std, curr_mean = funct.compute_std_mean(comp_wav)
+            curr_std, curr_mean = funct.db_stats(comp_wav)
             mean = mean + curr_mean
             std = std + curr_std
 
-            # Update tqdm progress bar with fixed number of decimals for loss
             pbar.set_postfix({"Mean": f"{curr_mean:.4f}", 
-                              "Standard Deviation": f"{curr_std:.4f}"})
+                              "Std Dev": f"{curr_std:.4f}"})
 
-        mean = mean / (i+1)
-        std = std / (i+1)
+        mean = mean / total
+        std = std / total
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")
+        with open(stats_path, 'wb') as f:
+            pickle.dump([mean,std], f)
+        print(f"Saved training dataset stats in \"{stats_path}\'")
 
     print("\nInitializing model, loss function, and optimizer...")
 
@@ -331,7 +336,7 @@ def main(rank, world_size):
                     uncomp_wav = torch.unsqueeze(uncomp_wav, dim=0)
                     # Make sure input waveform is same length as label
                     if(uncomp_wav.shape[2] != comp_wav.shape[2]):
-                        print(f"{fileinfo[0][0]} mismatched size, input is " 
+                        print(f"{fileinfo[0]} mismatched size, input is " 
                               f"{comp_wav.shape[2]} and label is "
                               f"{uncomp_wav.shape[2]}")
                         comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
@@ -608,7 +613,7 @@ def main(rank, world_size):
                           context={"subset":"test"})
                 #run.track(-sdr.item(), name='sdr', step=test_step, epoch=epoch+1, 
                 #          context={"subset":"test"})
-                if(not (i > small_test_end)):
+                if(not (i > small_test_end) and run_small_test):
                     run.track(loss.item(), name='loss', step=small_test_step, 
                               epoch=epoch+1, context={"subset":"small_test"})
                     #run.track(-sdr.item(), name='sdr', step=small_test_step, epoch=

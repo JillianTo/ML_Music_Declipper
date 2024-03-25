@@ -16,10 +16,11 @@ class Functional():
         self.device = device
         self.n_fft = n_fft
 
+
     def mean(self, tensor):
         return torch.sum(tensor)/torch.numel(tensor)
 
-    def wav_to_mel_db(self, tensor, n_mels=128, top_db=80):
+    def wav_to_mel_db(self, tensor, n_mels=128, top_db=None):
         mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, 
                                f_max=self.sample_rate>>1, n_mels=n_mels)
         mel = mel.to(self.device)
@@ -28,7 +29,7 @@ class Functional():
         
         return amp_to_db(mel(tensor))
 
-    def wav_to_pow_db(self, tensor, top_db=80):
+    def wav_to_pow_db(self, tensor, top_db=None):
         pow_spec = T.Spectrogram(n_fft=self.n_fft, power=2)
         pow_spec = pow_spec.to(self.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
@@ -41,12 +42,12 @@ class Functional():
         complex_spec = complex_spec.to(self.device)
         return  complex_spec(tensor)
 
-    def wav_to_db(self, tensor, top_db=80):
+    def wav_to_db(self, tensor, top_db=None):
         amp_to_db = T.AmplitudeToDB(stype="amplitude", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         return amp_to_db(tensor)
 
-    def compute_std_mean(self, tensor, top_db=80):
+    def db_stats(self, tensor, top_db=None, max_min=False):
         # Convert input to complex spectrogram
         x = self.wav_to_complex(tensor)
 
@@ -56,25 +57,12 @@ class Functional():
         amp_to_db = amp_to_db.to(self.device)
         x = amp_to_db(x)
 
-        # Calculate standard deviation and mean
-        return torch.std_mean(x)
+        # Calculate and return stats
+        if(max_min):
+            return torch.std_mean(x) + (torch.max(x),torch.min(x),)
+        else:
+            return torch.std_mean(x)
 
-    def find_max_min(self, tensor):
-        # Convert input to complex spectrogram
-        x = self.wav_to_complex(tensor, n_fft=self.n_fft)
-
-        # Calculate phase of complex spectrogram
-        phase = torch.atan(x.imag/(x.real+1e-7))
-        phase[x.real < 0] += 3.14159265358979323846264338
-
-        # Calculate magnitude of complex spectrogram
-        x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
-        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
-        amp_to_db = amp_to_db.to(self.device)
-        x = amp_to_db(x)
-
-        # Calculate maximum and minimum
-        return torch.max(x), torch.min(x)
 
     def sum(self, tensor):
         tensor = tensor[:,0,:] + tensor[:,1,:]  
@@ -180,8 +168,10 @@ class Functional():
         # Load waveform
         filename = fileinfo[0]
         if(not is_input):
-            filename = filename.replace("-1-", "")
-            filename = filename.replace("-2-", "")
+            filename = filename.replace("--01--.wav", ".wav")
+            filename = filename.replace("--10--.wav", ".wav")
+            filename = filename.replace("--11--.wav", ".wav")
+            filename = filename.replace("--20--.wav", ".wav")
 
         wav_path = path + filename
         wav, sample_rate = torchaudio.load(wav_path)
@@ -207,9 +197,10 @@ class Functional():
         input_wav_path = input_path + filename
         input_wav, input_sample_rate = torchaudio.load(input_wav_path)
         label_wav_path = (label_path 
-                          + filename.replace("-1-", ""))
-        label_wav_path = (label_path 
-                          + filename.replace("-2-", ""))
+                          + filename.replace("--01--.wav", ".wav"))
+        label_wav_path = label_wav_path.replace("--10--.wav", ".wav")
+        label_wav_path = label_wav_path.replace("--11--.wav", ".wav")
+        label_wav_path = label_wav_path.replace("--20--.wav", ".wav")
         label_wav, label_sample_rate = torchaudio.load(label_wav_path)
 
         # Move waveforms to device

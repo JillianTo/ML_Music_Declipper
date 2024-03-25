@@ -219,7 +219,7 @@ class SpecAutoEncoder(nn.Module):
 
         # Calculate magnitude of complex spectrogram
         x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
-        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=80)
+        amp_to_db = T.AmplitudeToDB(stype='amplitude')
         amp_to_db = amp_to_db.to(device)
         x = amp_to_db(x)
 
@@ -244,9 +244,6 @@ class SpecAutoEncoder(nn.Module):
         x = x.reshape(x.size(0), freq_dim*time_dim, x.size(1))
         x, _ = self.lstm(x)
         x = x.reshape(x.size(0), x.size(2), freq_dim, time_dim)
-
-        # Move input to device 1
-        x = x.to(device)
 
         # Decoder
         x = self.dec1(x)
