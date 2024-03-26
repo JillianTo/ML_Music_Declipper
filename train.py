@@ -180,8 +180,8 @@ def main(rank, world_size):
     if(os.path.isfile(stats_path)):
         with open(stats_path, 'rb') as f:
             db_stats = pickle.load(f)
-            mean = db_stats[0]
-            std = db_stats[1]
+            mean = db_stats[0].to(device)
+            std = db_stats[1].to(device)
     else:
         print("Calculating mean and std...")
         mean = 0

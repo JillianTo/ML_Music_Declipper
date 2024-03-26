@@ -1,6 +1,7 @@
 import os
 import sys
 import math
+import pickle
 from audiodataset import AudioDataset
 from autoencoder import SpecAutoEncoder, WavAutoEncoder
 from functional import Functional
@@ -50,8 +51,8 @@ stats_path = "db_stats.txt"
 if(os.path.isfile(stats_path)):
     with open(stats_path, 'rb') as f:
         db_stats = pickle.load(f)
-        mean = db_stats[0]
-        std = db_stats[1]
+        mean = db_stats[0].to(device)
+        std = db_stats[1].to(device)
 else:
     sys.exit('No mean or std provided, force quitting.')
 
