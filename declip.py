@@ -1,4 +1,5 @@
 import os
+import sys
 import math
 from audiodataset import AudioDataset
 from autoencoder import SpecAutoEncoder, WavAutoEncoder
@@ -14,13 +15,13 @@ import torchaudio.transforms as T
 path = "/mnt/PC801/declip/"
 #path = "/mnt/MP600/data/comp/testDeclip/"
 #weights_path = "/mnt/PC801/declip/results/03-10/model06.pth"
-weights_path = "/mnt/PC801/declip/results/model03.pth"
+weights_path = "/mnt/PC801/declip/results/model01.pth"
 output_path = "/mnt/PC801/declip/new/"
 sample_rate = 44100
 #mean = -0.4622
-mean = -3.9821
+#mean = -3.9821
 #std = 13.8257
-std = 13.9869
+#std = 13.9869
 spectrogram_autoencoder = True
 part_time = 2250000
 #part_time = 2750000
@@ -43,6 +44,16 @@ device = (
 )
 device = "cpu"
 print(f"Using {device} device")
+
+# Get mean and std from file
+stats_path = "db_stats.txt"
+if(os.path.isfile(stats_path)):
+    with open(stats_path, 'rb') as f:
+        db_stats = pickle.load(f)
+        mean = db_stats[0]
+        std = db_stats[1]
+else:
+    sys.exit('No mean or std provided, force quitting.')
 
 # Get files to declip
 funct = Functional(sample_rate, part_time, device)
