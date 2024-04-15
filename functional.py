@@ -10,18 +10,18 @@ import torchaudio.transforms as T
 
 class Functional():
 
-    def __init__(self, sample_rate, max_time, device, n_fft=4096):
+    def __init__(self, sample_rate, max_time, device, n_fft, hop_length):
         self.sample_rate = sample_rate
         self.max_time = max_time
         self.device = device
         self.n_fft = n_fft
-
+        self.hop_length = hop_length
 
     def mean(self, tensor):
         return torch.sum(tensor)/torch.numel(tensor)
 
     def wav_to_mel_db(self, tensor, n_mels=128, top_db=None):
-        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, 
+        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, hop_length=self.hop_length, 
                                f_max=self.sample_rate>>1, n_mels=n_mels)
         mel = mel.to(self.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
@@ -29,8 +29,8 @@ class Functional():
         
         return amp_to_db(mel(tensor))
 
-    def wav_to_pow_db(self, tensor, top_db=None):
-        pow_spec = T.Spectrogram(n_fft=self.n_fft, power=2)
+    def wav_to_spec_db(self, tensor, top_db=None):
+        pow_spec = T.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, power=2)
         pow_spec = pow_spec.to(self.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
@@ -38,12 +38,12 @@ class Functional():
         return amp_to_db(pow_spec(tensor))
 
     def wav_to_complex(self, tensor):
-        complex_spec = T.Spectrogram(n_fft=self.n_fft, power=None)
+        complex_spec = T.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, power=None)
         complex_spec = complex_spec.to(self.device)
         return  complex_spec(tensor)
 
     def wav_to_db(self, tensor, top_db=None):
-        amp_to_db = T.AmplitudeToDB(stype="amplitude", top_db=top_db)
+        amp_to_db = T.AmplitudeToDB(stype="amplitude", hop_length=self.hop_length, top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         return amp_to_db(tensor)
 

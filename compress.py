@@ -11,15 +11,16 @@ xo_freqs = [100, 400, 1600, 6400]
 attack_delay = ["0.005,0.1", "0.003,0.05", "0.000625,0.0125", "0.0001,0.025", "0,0.025"]
 #attack_delay = ["0.005,0.1", "0.003,0.05", "0.000625,0.0125", "0.0001,0.025", "0.0001,0.025","0,0.025", "0,0.025"]
 #input_path = "/mnt/MP600/data/uncomp/"
-input_path = "/mnt/MP600/data/small/uncomp/"
+input_path = "/mnt/MP600/data/new/uncomp/"
+#input_path = "/mnt/MP600/data/small/uncomp/"
 #input_path = "/mnt/PC801/declip/"
 tmp_path = "/mnt/MP600/data/comp/tmp/"
 #tmp_path = "/mnt/PC801/declip/comp/"
 #output_path = "/mnt/MP600/data/comp/train/"
-output_path = "/mnt/MP600/data/small/comp/train/"
+output_path = "/mnt/MP600/data//new/comp/"
+#output_path = "/mnt/MP600/data/small/comp/train/"
 #output_path = "/mnt/PC801/declip/newcomp/"
-#num_comps = 3
-num_comps = 1
+num_comps = 3
 
 last_comp = num_comps-1
 for filename in tqdm(os.listdir(input_path)):

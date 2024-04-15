@@ -5,6 +5,7 @@ import auraloss
 import numpy as np
 from tqdm import tqdm
 import pickle
+from autoclip.torch import QuantileClip
 
 from audiodataset import AudioDataset
 from autoencoder import SpecAutoEncoder, WavAutoEncoder
@@ -27,7 +28,6 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    #"learning_rate": 0.00005,
     "learning_rate": 0.00001,
     "batch_size": 1,
     "test_batch_size": 1,
@@ -40,18 +40,26 @@ run["hparams"] = {
     "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
     #"test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
     "results_path": "/mnt/PC801/declip/results/",
-    "max_time": 1907500,
-    "test_max_time": 4250000,
+    #"max_time": 1907500,
+    "max_time": 1964950,
+    #"test_max_time": 4250000,
+    "test_max_time": 5395000,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
     "spectrogram_autoencoder": True,
-    #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/04-08/model08.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/model02.pth",
     "preload_weights_path": None,
-    #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer01.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/04-08/optimizer08.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer02.pth",
     "preload_optimizer_path": None,
-    #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/04-08/scheduler08.pth",
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler02.pth",
     "preload_scheduler_path": None,
+    "preload_autoclip_path": None,
+    "n_fft": 2048,
+    "hop_length": 512,
     "run_small_test": False,
     #"eps": 0.0000000001,
     "eps": 0.00000001,
@@ -61,12 +69,13 @@ run["hparams"] = {
     "scheduler_factors": [0.1, 0.1, 0.1],
     #"scheduler_patiences": [2, 4],
     #"scheduler_patiences": [2, 3, 4],
-    "scheduler_patiences": [0, 1, 2],
-    "test_points": [0.05, 0.125,  0.25],
+    "scheduler_patiences": [0, 2, 4],
+    "test_points": [0.125, 0.25,  0.5],
     "overwrite_preloaded_scheduler_values": False,
     "test_first": False,
-    "autoclip": True,
-    "multigpu": False, # Does not work yet
+    "autoclip": False,
+    "multigpu": False, # TODO: Does not work yet
+    "cuda_device": 1, # Choose which single GPU to use 
 }
 
 # Set up DDP process groups
@@ -96,6 +105,8 @@ def main(rank, world_size):
     preload_weights_path = run["hparams", "preload_weights_path"]
     preload_opt_path = run["hparams", "preload_optimizer_path"]
     preload_sch_path = run["hparams", "preload_scheduler_path"]
+    n_fft = run["hparams", "n_fft"]
+    hop_length = run["hparams", "hop_length"]
     run_small_test = run["hparams", "run_small_test"]
     sch_state = run["hparams", "scheduler_state"]
     factors = run["hparams", "scheduler_factors"]
@@ -113,7 +124,7 @@ def main(rank, world_size):
     print("\nLoading data...")
 
     # Add inputs and labels to training dataset
-    funct = Functional(sample_rate, max_time, rank)
+    funct = Functional(sample_rate, max_time, rank, n_fft, hop_length)
     if(batch_size > 1):
         train_data = AudioDataset(funct, 
                                      run["hparams", "compressed_data_path"], 
@@ -130,7 +141,7 @@ def main(rank, world_size):
     print(f"Added {len(train_data)} file pairs to training data")
 
     # Add inputs and labels to test dataset
-    test_funct = Functional(sample_rate, test_max_time, rank)
+    test_funct = Functional(sample_rate, test_max_time, rank, n_fft, hop_length)
     if(test_batch_size > 1):
         test_data = AudioDataset(test_funct, 
                                  run["hparams", "test_compressed_data_path"], 
@@ -180,15 +191,16 @@ def main(rank, world_size):
     if(os.path.isfile(stats_path)):
         with open(stats_path, 'rb') as f:
             db_stats = pickle.load(f)
-            mean = db_stats[0].to(device)
-            std = db_stats[1].to(device)
+            mean = db_stats[0]
+            std = db_stats[1]
+            print(f"Loaded stats from \"stats_path\" with mean {mean} and std {std}")
     else:
         print("Calculating mean and std...")
         mean = 0
         std = 0
         total = len(trainloader)
         pbar = tqdm(enumerate(trainloader), total=total, 
-                    desc=f"Train Stats")
+                    desc=f"Train Set Stats")
 
         for i, (comp_wav, _) in pbar:
             curr_std, curr_mean = funct.db_stats(comp_wav)
@@ -198,18 +210,18 @@ def main(rank, world_size):
             pbar.set_postfix({"Mean": f"{curr_mean:.4f}", 
                               "Std Dev": f"{curr_std:.4f}"})
 
-        mean = mean / total
-        std = std / total
+        mean = (mean / total).item()
+        std = (std / total).item()
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")
         with open(stats_path, 'wb') as f:
             pickle.dump([mean,std], f)
-        print(f"Saved training dataset stats in \"{stats_path}\'")
+        print(f"Saved training set stats in \"{stats_path}\'")
 
     print("\nInitializing model, loss function, and optimizer...")
 
     # Initialize model
     if run["hparams", "spectrogram_autoencoder"]:
-        model = SpecAutoEncoder(mean, std, n_fft=4096, hop_length=1024)
+        model = SpecAutoEncoder(mean, std, n_fft, hop_length)
         print("Using spectrogram autoencoder")
     else:
         model = WavAutoEncoder(rank)
@@ -239,6 +251,10 @@ def main(rank, world_size):
         print(f"Preloaded optimizer from \"{preload_opt_path}\" "
               f"with learning rate {optimizer.param_groups[0]['lr']}")
 
+    if autoclip:
+        optimizer = QuantileClip.as_optimizer(optimizer=optimizer, quantile=0.9, history_length=1000)
+        print("Using autoclip")
+
     # Initialize scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
                                                      factor=factors[sch_state], 
@@ -254,11 +270,9 @@ def main(rank, world_size):
               f"{scheduler.factor} and patience {scheduler.patience}")
 
     # Initialize loss function
-    fft_sizes = [2048, 4096, 8192]
-    #fft_sizes = [4096, 8192, 16384]
-    #fft_sizes = [8192, 16384, 32768]
+    fft_sizes = [int(n_fft>>1), n_fft, n_fft<<1]
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                   hop_sizes=[fft_size//8 for 
+                                                   hop_sizes=[fft_size//4 for 
                                                               fft_size in 
                                                               fft_sizes], 
                                                    win_lengths=fft_sizes,
@@ -267,14 +281,13 @@ def main(rank, world_size):
                                                    scale=None, n_bins=64)
     mrstft.to(rank)
     mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                       hop_sizes=[fft_size//8 for 
+                                                       hop_sizes=[fft_size//4 for 
                                                                   fft_size in 
                                                                   fft_sizes], 
                                                        win_lengths=fft_sizes, 
                                                        sample_rate=sample_rate, 
                                                        scale='mel', n_bins=64)
     mel_mrstft.to(rank)
-    #sisdr = auraloss.time.SISDRLoss()
 
     # Steps needed for data plotting in Aim
     train_step = 0
@@ -299,19 +312,13 @@ def main(rank, world_size):
     # Last time scheduler parameters will be changed
     sch_change = len(factors) - 1
 
-    # Get normalized gradient history
-    if(autoclip):
-        grad_history = []
-
     # Training Loop
     print("\nStarting training loop...")
     for epoch in range(run["hparams", "num_epochs"]):
         # Training phase
         if(not (epoch < 1 and test_first)):
             tot_loss = 0
-            #tot_sdr = 0
             avg_loss = 0
-            #avg_sdr = 0
             pbar = tqdm(enumerate(trainloader), total=len(trainloader), 
                         desc=f"Train Epoch {epoch+1}")
             for i, (comp_wav, fileinfo) in pbar:
@@ -341,11 +348,11 @@ def main(rank, world_size):
                               f"{uncomp_wav.shape[2]}")
                         comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
 
+                # Scale estimate to label mean
+                comp_wav = comp_wav*(funct.mean(abs(uncomp_wav))/funct.mean(abs(comp_wav)))
+
                 # Calculate individual channel loss
                 loss = mrstft(comp_wav, uncomp_wav)
-
-                # Calculate SI-SDR
-                #sdr = sisdr(comp_wav, uncomp_wav)
 
                 # Sum waveforms to one channel
                 comp_wav = funct.sum(comp_wav)
@@ -363,23 +370,7 @@ def main(rank, world_size):
 
                 # Backward pass: compute the gradient of the loss with respect to 
                 # model parameters
-                #loss.backward(retain_graph=True)
                 loss.backward()
-                #sdr.backward()
-
-                # Adapted from 
-                # https://github.com/pseeth/autoclip/blob/master/autoclip.py, 
-                # removes Pytorch Ignite dependency
-                # Clip gradients
-                if(autoclip):
-                    tot_norm = 0
-                    for p in model.parameters():
-                        if p.grad is not None:
-                            tot_norm += p.grad.data.norm(2).item() ** 2
-                    tot_norm = tot_norm ** (1. / 2)
-                    grad_history.append(tot_norm)
-                    clip_val = np.percentile(grad_history, 10)
-                    nn.utils.clip_grad_norm_(model.parameters(), clip_val)
 
                 # Update the model's parameters using the optimizer's step method
                 optimizer.step()
@@ -388,25 +379,19 @@ def main(rank, world_size):
                 del comp_wav
                 del uncomp_wav
 
-                # Add loss and SDR to totals
+                # Add loss to total
                 tot_loss += loss.item()
-                #tot_sdr -= sdr.item()
 
-                # Calculate average loss and SDR so far
+                # Calculate average loss so far
                 avg_loss = tot_loss / (i+1)
-                #avg_sdr = tot_sdr / (i+1)
 
                 # Log loss to Aim
                 run.track(loss.item(), name='loss', step=train_step, epoch=epoch+1, 
                           context={"subset":"train"})
-                #run.track(-sdr.item(), name='sdr', step=train_step, epoch=epoch+1, 
-                #          context={"subset":"train"})
 
                 # Update tqdm progress bar with fixed number of decimals for loss
                 pbar.set_postfix({"Loss": f"{loss.item():.4f}", 
                                   "Avg Loss": f"{avg_loss:.4f}"})
-                #                  "SDR": f"{-sdr.item():.4f}", 
-                #                  "Avg SDR": f"{avg_sdr:.4f}"})
 
                 # Increment step for next Aim log
                 train_step = train_step + 1
@@ -419,9 +404,7 @@ def main(rank, world_size):
                             model.eval()
                             with torch.no_grad():
                                 tot_test_loss = 0
-                                #tot_test_sdr = 0
                                 avg_test_loss = 0
-                                #avg_test_sdr = 0
                                 test_pbar = tqdm(enumerate(testloader), 
                                                  total=small_test_end+1, 
                                                  desc=f"Small Test Epoch "
@@ -458,9 +441,6 @@ def main(rank, world_size):
                                     # Calculate individual channel loss
                                     loss = mrstft(comp_wav, uncomp_wav)
 
-                                    # Calculate SDR 
-                                    #sdr = sisdr(comp_wav, uncomp_wav)
-
                                     # Sum waveforms to one channel
                                     comp_wav = funct.sum(comp_wav)
                                     uncomp_wav = funct.sum(uncomp_wav)
@@ -476,13 +456,11 @@ def main(rank, world_size):
                                     del comp_wav
                                     del uncomp_wav
 
-                                    # Add loss and SDR to totals
+                                    # Add loss to total
                                     tot_test_loss += loss.item()
-                                    #tot_test_sdr -= sdr.item()
 
-                                    # Calculate current average loss and SDR
+                                    # Calculate current average loss
                                     avg_test_loss = tot_test_loss / (i+1)
-                                    #avg_test_sdr = tot_test_sdr / (i+1)
 
                                     # Log loss to Aim
                                     run.track(loss.item(), name='loss', 
@@ -490,11 +468,6 @@ def main(rank, world_size):
                                               epoch=epoch+1, 
                                               context=
                                               {"subset":"small_test"})
-                                    #run.track(-sdr.item(), name='sdr', 
-                                    #          step=small_test_step, 
-                                    #          epoch=epoch+1, 
-                                    #          context=
-                                    #          {"subset":"small_test"})
                                 
                                     # Increment step for next Aim log
                                     small_test_step += 1
@@ -503,21 +476,15 @@ def main(rank, world_size):
                                     # number of decimals for loss
                                     test_pbar.set_postfix(
                                             {"Loss": f"{loss.item():.4f}", 
-                                    #         "SDR": f"{-sdr.item():.4f}",
                                              "Avg Loss": f"{avg_test_loss:.4f}"})
-                                    #         "Avg SDR": f"{avg_test_sdr:.4f}"})
 
                             # Send average training loss to scheduler
                             scheduler.step(avg_test_loss)
 
-                            # Log average test loss and SDR to Aim and 
-                            # terminal
+                            # Log average test loss and to Aim and CLI
                             run.track(avg_test_loss, name='avg_loss', 
                                       step=scheduler.last_epoch, epoch=epoch+1, 
                                       context={"subset":"small_test"})
-                            #run.track(avg_test_sdr, name='avg_sdr', 
-                            #          step=scheduler.last_epoch, epoch=epoch+1, 
-                            #          context={"subset":"small_test"})
 
                             # Check if learning rate was changed
                             if(optimizer.param_groups[0]['lr'] < learning_rate):
@@ -548,16 +515,12 @@ def main(rank, world_size):
             # Log average training loss to Aim
             run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                       context={"subset":"train"})
-            #run.track(avg_sdr, name='avg_sdr', step=epoch+1, epoch=epoch+1, 
-            #          context={"subset":"train"})
 
         # Full testing phase
         model.eval()
         with torch.no_grad():
             tot_loss = 0
-            #tot_sdr = 0
             avg_loss = 0
-            #avg_sdr = 0
             pbar = tqdm(enumerate(testloader), total=len(testloader), 
                         desc=f"Test Epoch {epoch+1}")
             for i, (comp_wav, fileinfo) in pbar:
@@ -583,9 +546,6 @@ def main(rank, world_size):
                 # Calculate individual channel loss
                 loss = mrstft(comp_wav, uncomp_wav)
 
-                # Calculate SDR
-                #sdr = sisdr(comp_wav, uncomp_wav)
-
                 # Sum waveforms to one channel
                 comp_wav = funct.sum(comp_wav)
                 uncomp_wav = funct.sum(uncomp_wav)
@@ -600,24 +560,18 @@ def main(rank, world_size):
                 del comp_wav
                 del uncomp_wav
 
-                # Add loss and SDR to totals
+                # Add loss to total
                 tot_loss += loss.item()
-                #tot_sdr -= sdr.item()
 
-                # Calculate average loss and SDR so far
+                # Calculate average loss so far
                 avg_loss = tot_loss / (i+1)
-                #avg_sdr = tot_sdr / (i+1)
 
                 # Log loss to Aim
                 run.track(loss.item(), name='loss', step=test_step, epoch=epoch+1, 
                           context={"subset":"test"})
-                #run.track(-sdr.item(), name='sdr', step=test_step, epoch=epoch+1, 
-                #          context={"subset":"test"})
                 if(not (i > small_test_end) and run_small_test):
                     run.track(loss.item(), name='loss', step=small_test_step, 
                               epoch=epoch+1, context={"subset":"small_test"})
-                    #run.track(-sdr.item(), name='sdr', step=small_test_step, epoch=
-                    #          epoch+1, context={"subset":"small_test"})
 
                 # Increment step for next Aim log
                 test_step += 1
@@ -625,8 +579,6 @@ def main(rank, world_size):
                 # Update tqdm progress bar with fixed number of decimals for loss
                 pbar.set_postfix({"Loss": f"{loss.item():.4f}", 
                                   "Avg Loss": f"{avg_loss:.4f}"}) 
-                                  #"SDR": f"{-sdr.item():.4f}", 
-                                  #"Avg SDR": f"{avg_sdr:.4f}"})
 
                 # Step scheduler after small_test_end batches
                 if(i == small_test_end and run_small_test and step_sch):
@@ -648,11 +600,9 @@ def main(rank, world_size):
                         if(not (learning_rate * (1-scheduler.factor) 
                                 > scheduler.eps)):
                             step_sch = False
-                    # Log average loss and SDR to Aim
+                    # Log average loss to Aim
                     run.track(avg_loss, name='avg_loss', step=scheduler.last_epoch, 
                               epoch=epoch+1, context={"subset":"small_test"})
-                    #run.track(avg_sdr, name='avg_sdr', step=scheduler.last_epoch, 
-                    #          epoch=epoch+1, context={"subset":"small_test"})
 
        # Step scheduler at the end of full test phase if not set to step in small 
        # tests
@@ -684,11 +634,9 @@ def main(rank, world_size):
             torch.save(scheduler.state_dict(), 
                        results_path+f"scheduler{(epoch+1):02d}.pth")
 
-        # Log average test loss and SDR and last model output to Aim
+        # Log average test loss to Aim
         run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                   context={"subset":"test"})
-        #run.track(avg_sdr, name='avg_sdr', step=epoch+1, epoch=epoch+1, 
-        #          context={ "subset":"test" })
     
     if(world_size != None):
         cleanup()
@@ -697,8 +645,9 @@ def main(rank, world_size):
 
 if __name__ == "__main__":
     # Get CPU, GPU, or MPS device for training
+    cuda_device = f"cuda:{run['hparams', 'cuda_device']}"
     device = (
-            "cuda:0"
+            cuda_device
             if torch.cuda.is_available()
             else "mps"
             if torch.backends.mps.is_available()
@@ -706,7 +655,7 @@ if __name__ == "__main__":
     )
     print(f"Using {device} device")
 
-    if(run["hparams", "multigpu"] and device == "cuda:0"):
+    if(run["hparams", "multigpu"] and device == cuda_device):
         n_gpus = torch.cuda.device_count()
         print(f"Using {n_gpus} GPUs")
         mp.spawn(main, args=[n_gpus], nprocs=n_gpus, join=True)

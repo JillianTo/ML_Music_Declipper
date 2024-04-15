@@ -15,16 +15,20 @@ import torchaudio.transforms as T
 # Parameters
 path = "/mnt/PC801/declip/"
 #path = "/mnt/MP600/data/comp/testDeclip/"
-#weights_path = "/mnt/PC801/declip/results/03-10/model06.pth"
 weights_path = "/mnt/PC801/declip/results/model01.pth"
+#weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
 output_path = "/mnt/PC801/declip/new/"
 sample_rate = 44100
+pickle_stats = True
+mean = -4.3546 # Only used when pickle_stats=False
+std = 15.4338 # Only used when pickle_stats=False
 #mean = -0.4622
 #mean = -3.9821
 #std = 13.8257
 #std = 13.9869
 spectrogram_autoencoder = True
 part_time = 2250000
+#part_time = 1907500
 #part_time = 2750000
 overlap_factor = 20
 extra_factor = 0.999
@@ -32,38 +36,43 @@ fade_shape = 'logarithmic'
 save_part_wav = False
 test_fade = False
 norm_thres = 0.01
-eq = True
+eq = False # Does not work well 
 save_noeq_wav = True
+n_fft = 2048
+hop_length = 521
 
 # Get CPU, GPU, or MPS device for inference
 device = (
-        "cuda"
+        "cuda:0"
         if torch.cuda.is_available()
         else "mps"
         if torch.backends.mps.is_available()
         else "cpu"
 )
-device = "cpu"
+#device = "cpu"
 print(f"Using {device} device")
 
 # Get mean and std from file
-stats_path = "db_stats.txt"
-if(os.path.isfile(stats_path)):
-    with open(stats_path, 'rb') as f:
-        db_stats = pickle.load(f)
-        mean = db_stats[0].to(device)
-        std = db_stats[1].to(device)
-else:
-    sys.exit('No mean or std provided, force quitting.')
+if(pickle_stats):
+    stats_path = "db_stats.txt"
+    if(os.path.isfile(stats_path)):
+        with open(stats_path, 'rb') as f:
+            #db_stats = torch.load(f, map_location=torch.device(device))
+            db_stats = pickle.load(f)
+            mean = db_stats[0]
+            std = db_stats[1]
+            print(f"Loaded mean {mean:.4f} and std {std:.4f} from \'{stats_path}\'")
+    else:
+        sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
 
 # Get files to declip
-funct = Functional(sample_rate, part_time, device)
+funct = Functional(sample_rate, part_time, device, n_fft, hop_length)
 dataset = AudioDataset(funct, path, None, same_time=False, pad_thres=999, 
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights
 if spectrogram_autoencoder:
-    model = SpecAutoEncoder(mean, std)
+    model = SpecAutoEncoder(mean, std, n_fft, hop_length)
     print("Using spectrogram autoencoder")
 else:
     model = WavAutoEncoder(device)
@@ -143,35 +152,32 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
     # Save copy of input tensor
     edit_wav = tensor
 
+    # Equalize volumes
+    orig_mean = funct.mean(abs(orig_wav))
+    edit_mean = funct.mean(abs(edit_wav))
+    if(orig_mean > edit_mean):
+        orig_wav = orig_wav*(edit_mean/orig_mean)
+    elif(orig_mean < edit_mean):
+        edit_wav = edit_wav*(orig_mean/edit_mean)
+
     # Merge both waveforms so dB conversion has consistent scale
     edit_wav = torch.cat((orig_wav,edit_wav),dim=1)
 
-    # Convert combined waveform into dB scale Mel spectrogram
-    edit_wav = funct.wav_to_mel_db(edit_wav)
+    # Convert combined waveform into dB scale spectrogram
+    edit_wav = funct.wav_to_spec_db(edit_wav)
 
     # Separate combined waveform
     orig_wav = edit_wav[:,:,:int(edit_wav.shape[2]/2)]
     edit_wav = edit_wav[:,:,int(edit_wav.shape[2]/2):]
 
-    # Equalize volumes
-    orig_mean = funct.mean(orig_wav)
-    edit_mean = funct.mean(edit_wav)
-    if(orig_mean < edit_mean):
-        edit_wav = edit_wav*(orig_mean/edit_mean)
-    else:
-        orig_wav = orig_wav*(edit_mean/orig_mean)
+    # Find dB difference in frequency range
+    lower_f = int(orig_wav.shape[1]*0.15)
+    upper_f = int(orig_wav.shape[1]*0.5)
+    orig_wav = orig_wav[:,lower_f:upper_f,:]
+    edit_wav = edit_wav[:,lower_f:upper_f,:]
+    edit_wav = orig_wav-edit_wav
 
-    # Consider third fourth of mel filterbanks
-    lower_mel = int(orig_wav.shape[1]*0.5)
-    upper_mel = int(orig_wav.shape[1]*0.75)
-    orig_wav = orig_wav[:,lower_mel:upper_mel,:]
-    edit_wav = edit_wav[:,lower_mel:upper_mel,:]
-    orig_db = funct.mean(orig_wav)
-    edit_db = funct.mean(edit_wav)
-    del orig_wav
-    del edit_wav
-
-    diff_db = orig_db-edit_db
+    diff_db = funct.mean(edit_wav)
     eq_db = diff_db
 
     if(eq_db > 1):

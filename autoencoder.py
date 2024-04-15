@@ -5,7 +5,7 @@ import torchaudio.functional as F
 import torchaudio.transforms as T
 
 class SpecAutoEncoder(nn.Module):
-    def __init__(self, mean, std, n_fft=4096, hop_length=512, 
+    def __init__(self, mean, std, n_fft, hop_length, 
                  in_channels=2, first_out_channels=64, kernel_size=(3,3), 
                  up_kernel_size=(2,2), stride=(1,1), up_stride=(1,1), 
                  dropout=0.2):
@@ -218,7 +218,7 @@ class SpecAutoEncoder(nn.Module):
         phase[x.real < 0] += 3.14159265358979323846264338
 
         # Calculate magnitude of complex spectrogram
-        x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
+        x = torch.sqrt(torch.pow(x.real,2)+torch.pow(x.imag,2))
         amp_to_db = T.AmplitudeToDB(stype='amplitude')
         amp_to_db = amp_to_db.to(device)
         x = amp_to_db(x)
@@ -288,8 +288,11 @@ class SpecAutoEncoder(nn.Module):
 
         # Convert magnitude back to linear amplitude
         x = F.DB_to_amplitude(x, 1, 0.5)
-
+        
+        # Combine magnitude and phase
         x = torch.polar(x, phase)
+
+        # Convert spectrogram to waveform
         inv_spec = T.InverseSpectrogram(n_fft=self.n_fft, 
                                         hop_length=self.hop_length)
         inv_spec = inv_spec.to(device)
