@@ -28,7 +28,7 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.00001,
+    "learning_rate": 0.0001,
     "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 100, 
@@ -40,40 +40,35 @@ run["hparams"] = {
     "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
     #"test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
     "results_path": "/mnt/PC801/declip/results/",
-    #"max_time": 1907500,
-    "max_time": 1964950,
-    #"test_max_time": 4250000,
-    "test_max_time": 5395000,
+    "augmentation_labels": ["--01--","--10--","--11--","--20--"],
+    "max_time": 1880064,
+    "test_max_time": 4751360,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
     "spectrogram_autoencoder": True,
-    #"preload_weights_path": "/mnt/PC801/declip/results/04-08/model08.pth",
-    #"preload_weights_path": "/mnt/PC801/declip/results/model02.pth",
     "preload_weights_path": None,
-    #"preload_optimizer_path": "/mnt/PC801/declip/results/04-08/optimizer08.pth",
-    #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer02.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/04-08/model08.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
     "preload_optimizer_path": None,
-    #"preload_scheduler_path": "/mnt/PC801/declip/results/04-08/scheduler08.pth",
-    #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler02.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/04-08/optimizer08.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer01.pth",
     "preload_scheduler_path": None,
-    "preload_autoclip_path": None,
-    "n_fft": 2048,
-    "hop_length": 512,
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/04-08/scheduler08.pth",
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
+    "n_ffts": [254, 1022, 8190],
+    "hop_lengths": [64, 256, 2048],
+    "stats_n_fft": 1024,
+    "stats_hop_length": 512,
     "run_small_test": False,
-    #"eps": 0.0000000001,
     "eps": 0.00000001,
     "scheduler_state": 0,
-    #"scheduler_factors": [(1/3), 0.1],
-    #"scheduler_factors": [0.5, 0.4, 0.1],
     "scheduler_factors": [0.1, 0.1, 0.1],
-    #"scheduler_patiences": [2, 4],
-    #"scheduler_patiences": [2, 3, 4],
     "scheduler_patiences": [0, 2, 4],
     "test_points": [0.125, 0.25,  0.5],
     "overwrite_preloaded_scheduler_values": False,
     "test_first": False,
-    "autoclip": False,
+    "autoclip": True,
     "multigpu": False, # TODO: Does not work yet
     "cuda_device": 1, # Choose which single GPU to use 
 }
@@ -97,6 +92,7 @@ def main(rank, world_size):
     test_batch_size = run["hparams", "test_batch_size"]
     label_path = run["hparams", "uncompressed_data_path"]
     results_path = run["hparams", "results_path"]
+    augmentation_lbls = run["hparams", "augmentation_labels"]
     max_time = run["hparams", "max_time"]
     test_max_time = run["hparams", "test_max_time"]
     num_workers = run["hparams", "num_workers"]
@@ -105,8 +101,10 @@ def main(rank, world_size):
     preload_weights_path = run["hparams", "preload_weights_path"]
     preload_opt_path = run["hparams", "preload_optimizer_path"]
     preload_sch_path = run["hparams", "preload_scheduler_path"]
-    n_fft = run["hparams", "n_fft"]
-    hop_length = run["hparams", "hop_length"]
+    n_ffts = run["hparams", "n_ffts"]
+    hop_lengths = run["hparams", "hop_lengths"]
+    stats_n_fft = run["hparams", "stats_n_fft"]
+    stats_hop_length = run["hparams", "stats_hop_length"]
     run_small_test = run["hparams", "run_small_test"]
     sch_state = run["hparams", "scheduler_state"]
     factors = run["hparams", "scheduler_factors"]
@@ -124,7 +122,7 @@ def main(rank, world_size):
     print("\nLoading data...")
 
     # Add inputs and labels to training dataset
-    funct = Functional(sample_rate, max_time, rank, n_fft, hop_length)
+    funct = Functional(sample_rate=sample_rate, max_time=max_time, device=rank, n_fft=stats_n_fft, hop_length=stats_hop_length, max_n_fft=max(n_ffts)+2, augmentation_lbls=augmentation_lbls)
     if(batch_size > 1):
         train_data = AudioDataset(funct, 
                                      run["hparams", "compressed_data_path"], 
@@ -141,7 +139,7 @@ def main(rank, world_size):
     print(f"Added {len(train_data)} file pairs to training data")
 
     # Add inputs and labels to test dataset
-    test_funct = Functional(sample_rate, test_max_time, rank, n_fft, hop_length)
+    test_funct = Functional(sample_rate=sample_rate, max_time=test_max_time, device=rank, n_fft=stats_n_fft, hop_length=stats_hop_length, max_n_fft=max(n_ffts)+2, augmentation_lbls=augmentation_lbls)
     if(test_batch_size > 1):
         test_data = AudioDataset(test_funct, 
                                  run["hparams", "test_compressed_data_path"], 
@@ -157,6 +155,7 @@ def main(rank, world_size):
                                  pad_thres=2)
     print(f"Added {len(test_data)} file pairs to test data")
 
+    # If using multi-GPU, set up sampleres and dataloaders accordingly
     if(world_size != None):
         # Create samplers
         train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
@@ -173,7 +172,7 @@ def main(rank, world_size):
                                 shuffle=False, num_workers=num_workers, 
                                 pin_memory=pin_memory, 
                                 prefetch_factor=prefetch_factor, sampler=test_sampler)
-
+    # Else, set up dataloaders for single device
     else:
         # Create data loader for training data, enable shuffle if not using DDP
         trainloader = DataLoader(train_data, batch_size=batch_size, 
@@ -186,7 +185,7 @@ def main(rank, world_size):
                                 pin_memory=pin_memory, 
                                 prefetch_factor=prefetch_factor)
 
-    # Calculate mean and std for training set if not given
+    # Load stats from file if available
     stats_path = "db_stats.txt"
     if(os.path.isfile(stats_path)):
         with open(stats_path, 'rb') as f:
@@ -194,6 +193,7 @@ def main(rank, world_size):
             mean = db_stats[0]
             std = db_stats[1]
             print(f"Loaded stats from \"stats_path\" with mean {mean} and std {std}")
+    # Else, calculate stats for training data
     else:
         print("Calculating mean and std...")
         mean = 0
@@ -221,16 +221,17 @@ def main(rank, world_size):
 
     # Initialize model
     if run["hparams", "spectrogram_autoencoder"]:
-        model = SpecAutoEncoder(mean, std, n_fft, hop_length)
+        model = SpecAutoEncoder(mean=mean, std=std, n_ffts=n_ffts, hop_lengths=hop_lengths, sample_rate=sample_rate)
         print("Using spectrogram autoencoder")
     else:
         model = WavAutoEncoder(rank)
         print("Using waveform autoencoder")
     model = model.to(rank)
-
+    # If using multi-GPU, set up DDP
     if(world_size != None):
         model = DDP(model, device_ids=[rank],output_device=rank,find_unused_parameters=True)
 
+    # Load model weights from path if given
     if preload_weights_path != None:
         model.load_state_dict(torch.load(preload_weights_path, 
                                          map_location=torch.device(rank)))
@@ -238,6 +239,11 @@ def main(rank, world_size):
 
     # Initialize optimizer
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+    # If enabled, add AutoClip to optimizer
+    if autoclip:
+        optimizer = QuantileClip.as_optimizer(optimizer=optimizer, quantile=0.9, history_length=1000)
+        print("Using autoclip")
+    # Load saved optimizer from path if given
     if preload_opt_path != None:
         optimizer.load_state_dict(torch.load(preload_opt_path))
         if(overwrite_preload_sch):
@@ -251,16 +257,12 @@ def main(rank, world_size):
         print(f"Preloaded optimizer from \"{preload_opt_path}\" "
               f"with learning rate {optimizer.param_groups[0]['lr']}")
 
-    if autoclip:
-        optimizer = QuantileClip.as_optimizer(optimizer=optimizer, quantile=0.9, history_length=1000)
-        print("Using autoclip")
-
     # Initialize scheduler
     scheduler = optim.lr_scheduler.ReduceLROnPlateau(optimizer, 
                                                      factor=factors[sch_state], 
                                                      patience=patiences[sch_state],
-                                                     eps=run["hparams", "eps"],
-                                                     verbose=True)
+                                                     eps=run["hparams", "eps"])
+    # Load saved scheduler from path if given
     if preload_sch_path != None:
         scheduler.load_state_dict(torch.load(preload_sch_path))
         if(overwrite_preload_sch):
@@ -268,9 +270,27 @@ def main(rank, world_size):
             scheduler.patience = patiences[sch_state]
         print(f"Preloaded scheduler from \"{preload_sch_path}\" with factor "
               f"{scheduler.factor} and patience {scheduler.patience}")
+    
+    # Do not run small test if learning rate will not be reduced by more than 
+    # scheduler EPS
+    step_sch = (optimizer.param_groups[0]['lr'] * (1-scheduler.factor) 
+                > scheduler.eps)
+    
+    # Save when scheduler parameters will last be changed
+    sch_change = len(factors) - 1
 
-    # Initialize loss function
-    fft_sizes = [int(n_fft>>1), n_fft, n_fft<<1]
+    # Define local function for saving model, optimizer, and scheduler states
+    def saveStates(epoch):
+        # Save model and optimizer states
+        torch.save(model.state_dict(), results_path 
+                   +f"model{(epoch+1):02d}.pth")
+        torch.save(optimizer.state_dict(), results_path 
+                   +f"optimizer{(epoch+1):02d}.pth")
+        torch.save(scheduler.state_dict(), results_path 
+                   +f"scheduler{(epoch+1):02d}.pth")
+
+    # Initialize loss functions
+    fft_sizes = [256, 512, 1024]
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                    hop_sizes=[fft_size//4 for 
                                                               fft_size in 
@@ -278,16 +298,45 @@ def main(rank, world_size):
                                                    win_lengths=fft_sizes,
                                                    sample_rate=sample_rate, 
                                                    perceptual_weighting=True, 
-                                                   scale=None, n_bins=64)
+                                                   scale=None)
     mrstft.to(rank)
+    fft_sizes = [2048, 4096, 8192]
     mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                        hop_sizes=[fft_size//4 for 
                                                                   fft_size in 
                                                                   fft_sizes], 
                                                        win_lengths=fft_sizes, 
                                                        sample_rate=sample_rate, 
-                                                       scale='mel', n_bins=64)
+                                                       scale='mel', n_bins=256)
     mel_mrstft.to(rank)
+
+    # Define function for calculating loss
+    def calcLoss(pred, tgt):
+        # Make sure input waveform is same length as label
+        #if(tgt.shape[2] != pred.shape[2]):
+        #    print(f"{fileinfo[0][0]} mismatched size, input is " 
+        #          f"{pred.shape[2]} and label is "
+        #          f"{tgt.shape[2]}")
+        #    pred = funct.upsample(pred, tgt.shape[2])
+
+        # Scale estimate to label mean
+        pred = pred*(funct.mean(abs(tgt))/funct.mean(abs(pred)))
+
+        # Calculate individual channel loss
+        lr_loss = mrstft(pred, tgt)
+
+        # Sum waveforms to one channel
+        pred = funct.sum(pred)
+        tgt = funct.sum(tgt)
+
+        # Calculate sum loss
+        sum_loss = mel_mrstft(pred, tgt)
+
+        # Average sum and individual losses
+        loss = (lr_loss*(2/3)) + (sum_loss/3)
+       
+        # Return loss
+        return loss
 
     # Steps needed for data plotting in Aim
     train_step = 0
@@ -303,24 +352,31 @@ def main(rank, world_size):
     # Number of batches to check in small test
     small_test_end = int(((len(trainloader)*(max_time/test_max_time))
                           + len(testloader))*0.01)
-
-    # Do not run small test if learning rate will not be reduced by more than 
-    # scheduler EPS
-    step_sch = (optimizer.param_groups[0]['lr'] * (1-scheduler.factor) 
-                > scheduler.eps)
-
-    # Last time scheduler parameters will be changed
-    sch_change = len(factors) - 1
+    
+    # Get target waveform from fileinfo
+    def getTgt(batch_size, fileinfo, funct):
+        if(batch_size > 1):
+            tgt = fileinfo
+        else:
+            fileinfo = (fileinfo[0][0], fileinfo[1].item())
+            tgt = funct.process_wav(label_path, fileinfo, batch_size != 1, 
+                                    is_input=False)  
+            tgt = torch.unsqueeze(tgt, dim=0)
+        return tgt
 
     # Training Loop
     print("\nStarting training loop...")
     for epoch in range(run["hparams", "num_epochs"]):
-        # Training phase
+        # Check if test should be run first
         if(not (epoch < 1 and test_first)):
+            # Initialize total and average training loss to zero
             tot_loss = 0
             avg_loss = 0
+            # Initialize tqdm progress bar for training epoch
             pbar = tqdm(enumerate(trainloader), total=len(trainloader), 
                         desc=f"Train Epoch {epoch+1}")
+
+            # Training phase
             for i, (comp_wav, fileinfo) in pbar:
                 # Set model to train state
                 model.train()
@@ -333,40 +389,15 @@ def main(rank, world_size):
                 # Forward pass
                 comp_wav = model(comp_wav)
 
-                # Get uncompressed waveform
-                if(batch_size > 1):
-                    uncomp_wav = fileinfo
-                else:
-                    fileinfo = (fileinfo[0][0], fileinfo[1].item())
-                    uncomp_wav = funct.process_wav(label_path, fileinfo, 
-                                                   batch_size != 1, is_input=False)
-                    uncomp_wav = torch.unsqueeze(uncomp_wav, dim=0)
-                    # Make sure input waveform is same length as label
-                    if(uncomp_wav.shape[2] != comp_wav.shape[2]):
-                        print(f"{fileinfo[0]} mismatched size, input is " 
-                              f"{comp_wav.shape[2]} and label is "
-                              f"{uncomp_wav.shape[2]}")
-                        comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
-
-                # Scale estimate to label mean
-                comp_wav = comp_wav*(funct.mean(abs(uncomp_wav))/funct.mean(abs(comp_wav)))
-
-                # Calculate individual channel loss
-                loss = mrstft(comp_wav, uncomp_wav)
-
-                # Sum waveforms to one channel
-                comp_wav = funct.sum(comp_wav)
-                uncomp_wav = funct.sum(uncomp_wav)
-
-                # Calculate sum loss
-                sum_loss = mel_mrstft(comp_wav, uncomp_wav)
-
-                # Average sum and individual losses
-                loss = (loss*(2/3)) + (sum_loss/3)
+                # Get target waveform
+                uncomp_wav = getTgt(batch_size, fileinfo, funct)
+                
+                # Calculate loss
+                loss = calcLoss(comp_wav, uncomp_wav)
 
                 # Force stop if loss is nan
                 if(loss != loss):
-                    sys.exit(f"Training loss is {loss}, force exiting")
+                    sys.exit(f"Training loss is {loss} during \"{fileinfo[0]}\", force exiting")
 
                 # Backward pass: compute the gradient of the loss with respect to 
                 # model parameters
@@ -374,10 +405,6 @@ def main(rank, world_size):
 
                 # Update the model's parameters using the optimizer's step method
                 optimizer.step()
-
-                # Explicitly delete tensors so they don't stay in memory
-                del comp_wav
-                del uncomp_wav
 
                 # Add loss to total
                 tot_loss += loss.item()
@@ -389,7 +416,7 @@ def main(rank, world_size):
                 run.track(loss.item(), name='loss', step=train_step, epoch=epoch+1, 
                           context={"subset":"train"})
 
-                # Update tqdm progress bar with fixed number of decimals for loss
+                # Update tqdm progress bar 
                 pbar.set_postfix({"Loss": f"{loss.item():.4f}", 
                                   "Avg Loss": f"{avg_loss:.4f}"})
 
@@ -398,17 +425,24 @@ def main(rank, world_size):
 
                 # If training has completed for test_point number of batches
                 if(i%test_point == 0 and i < last_test_point and i > 0):
+                    # Run small test if enabled
                     if(run_small_test):
+                        # Run small test if learning rate can still be reduced
                         if(step_sch):
-                            # Small testing phase
+                            # Set model to validation state
                             model.eval()
+                            # Don't update gradients during validation
                             with torch.no_grad():
+                                # Initialize total and average small test loss to zero
                                 tot_test_loss = 0
                                 avg_test_loss = 0
+                                # Initialize tqdm progress bar for small test
                                 test_pbar = tqdm(enumerate(testloader), 
                                                  total=small_test_end+1, 
                                                  desc=f"Small Test Epoch "
                                                  f"{scheduler.last_epoch+1}")
+                                
+                                # Small test phase
                                 for i, (comp_wav, fileinfo) in test_pbar:
                                     # Stop small test after small_test_end batches
                                     if(i > small_test_end):
@@ -417,44 +451,11 @@ def main(rank, world_size):
                                     # Forward pass
                                     comp_wav = model(comp_wav)
 
-                                    # Get uncompressed waveform
-                                    if(test_batch_size > 1):
-                                        uncomp_wav = fileinfo
-                                    else:
-                                        fileinfo = (fileinfo[0][0], fileinfo[1].item())
-                                        uncomp_wav = test_funct.process_wav(
-                                                label_path, fileinfo, 
-                                                test_batch_size != 1, 
-                                                is_input=False)  
-                                        uncomp_wav = torch.unsqueeze(uncomp_wav, 
-                                                                     dim=0)
-                                        # Make sure input waveform is same 
-                                        # length as label
-                                        if(uncomp_wav.shape[2] != 
-                                           comp_wav.shape[2]):
-                                            print(f"{fileinfo[0][0]} mismatched size, "
-                                                  f"input is {comp_wav.shape[2]} and "
-                                                  f"label is {uncomp_wav.shape[2]}")
-                                            comp_wav = funct.upsample(comp_wav, 
-                                                    uncomp_wav.shape[2])
+                                    # Get target waveform
+                                    uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
 
-                                    # Calculate individual channel loss
-                                    loss = mrstft(comp_wav, uncomp_wav)
-
-                                    # Sum waveforms to one channel
-                                    comp_wav = funct.sum(comp_wav)
-                                    uncomp_wav = funct.sum(uncomp_wav)
-
-                                    # Calculate sum loss
-                                    sum_loss = mel_mrstft(comp_wav, uncomp_wav)
-
-                                    # Average losses
-                                    loss = (loss*(2/3)) + (sum_loss/3)
-
-                                    # Explicitly delete tensors so theydon't stay in 
-                                    # memory
-                                    del comp_wav
-                                    del uncomp_wav
+                                    # Calculate loss
+                                    loss = calcLoss(comp_wav, uncomp_wav)
 
                                     # Add loss to total
                                     tot_test_loss += loss.item()
@@ -478,87 +479,62 @@ def main(rank, world_size):
                                             {"Loss": f"{loss.item():.4f}", 
                                              "Avg Loss": f"{avg_test_loss:.4f}"})
 
-                            # Send average training loss to scheduler
+                            # Send average loss from this small test to scheduler
                             scheduler.step(avg_test_loss)
 
                             # Log average test loss and to Aim and CLI
                             run.track(avg_test_loss, name='avg_loss', 
                                       step=scheduler.last_epoch, epoch=epoch+1, 
                                       context={"subset":"small_test"})
-
+                            
                             # Check if learning rate was changed
                             if(optimizer.param_groups[0]['lr'] < learning_rate):
                                 # Save current learning rate
                                 learning_rate = optimizer.param_groups[0]['lr']
-                                # Change scheduler parameters after learning rate 
-                                # reduction
+                                # Change scheduler parameters after learning rate reduction
                                 if(sch_state < sch_change):
                                     sch_state += 1
                                     scheduler.factor = factors[sch_state]
                                     scheduler.patience = patiences[sch_state]
-                                    test_point = int(len(train_data)
+                                    test_point = int(len(train_data) 
                                                      * test_points[sch_state])
                                 # If learning rate will not be reduced by more than 
                                 # scheduler EPS, then do not run small test anymore
-                                if(not (learning_rate*(1-scheduler.factor)
+                                if(not (learning_rate * (1-scheduler.factor) 
                                         > scheduler.eps)):
                                     step_sch = False
-
-                    # Save model and optimizer states
-                    torch.save(model.state_dict(), results_path 
-                               +f"model{(epoch+1):02d}.pth")
-                    torch.save(optimizer.state_dict(), results_path 
-                               +f"optimizer{(epoch+1):02d}.pth")
-                    torch.save(scheduler.state_dict(), results_path 
-                               +f"scheduler{(epoch+1):02d}.pth")
+            
+                    # Save current model, optimizer, and scheduler states
+                    saveStates(epoch)
 
             # Log average training loss to Aim
             run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                       context={"subset":"train"})
+            
+            # Clear CUDA cache
+            torch.cuda.empty_cache()
 
-        # Full testing phase
+        # Set model to validation state
         model.eval()
+        # Don't update gradients during validation
         with torch.no_grad():
+            # Initialize total and average testing loss to zero
             tot_loss = 0
             avg_loss = 0
+            # Initialize tqdm progress bar for testing epoch
             pbar = tqdm(enumerate(testloader), total=len(testloader), 
                         desc=f"Test Epoch {epoch+1}")
+
+            # Testing phase
             for i, (comp_wav, fileinfo) in pbar:
                 # Forward pass
                 comp_wav = model(comp_wav)
 
-                # Get uncompressed waveform
-                if(test_batch_size > 1):
-                    uncomp_wav = fileinfo
-                else:
-                    fileinfo = (fileinfo[0][0], fileinfo[1].item())
-                    uncomp_wav = test_funct.process_wav(label_path, fileinfo, 
-                                                        test_batch_size != 1, 
-                                                        is_input=False)  
-                    uncomp_wav = torch.unsqueeze(uncomp_wav, dim=0)
-                    # Make sure input waveform is same length as label
-                    if(uncomp_wav.shape[2] != comp_wav.shape[2]):
-                        print(f"{fileinfo[0][0]} mismatched size, input is " 
-                              f"{comp_wav.shape[2]} and label is "
-                              f"{uncomp_wav.shape[2]}")
-                        comp_wav = funct.upsample(comp_wav, uncomp_wav.shape[2])
+                # Get target waveform
+                uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
 
-                # Calculate individual channel loss
-                loss = mrstft(comp_wav, uncomp_wav)
-
-                # Sum waveforms to one channel
-                comp_wav = funct.sum(comp_wav)
-                uncomp_wav = funct.sum(uncomp_wav)
-
-                # Calculate sum loss
-                sum_loss = mel_mrstft(comp_wav, uncomp_wav)
-
-                # Average sum and individual losses
-                loss = (loss*(2/3)) + (sum_loss/3)
-
-                # Explicitly delete tensors so they don't stay in memory
-                del comp_wav
-                del uncomp_wav
+                # Calculate loss
+                loss = calcLoss(comp_wav, uncomp_wav)
 
                 # Add loss to total
                 tot_loss += loss.item()
@@ -584,31 +560,17 @@ def main(rank, world_size):
                 if(i == small_test_end and run_small_test and step_sch):
                     # Send average small test loss to scheduler
                     scheduler.step(avg_loss)
-                    # Check if learning rate was changed
-                    if(optimizer.param_groups[0]['lr'] < learning_rate):
-                        # Save current learning rate
-                        learning_rate = optimizer.param_groups[0]['lr']
-                        # Change scheduler parameters after learning rate reduction
-                        if(sch_state < sch_change):
-                            sch_state += 1
-                            scheduler.factor = factors[sch_state]
-                            scheduler.patience = patiences[sch_state]
-                            test_point = int(len(train_data) 
-                                             * test_points[sch_state])
-                        # If learning rate will not be reduced by more than 
-                        # scheduler EPS, then do not run small test anymore
-                        if(not (learning_rate * (1-scheduler.factor) 
-                                > scheduler.eps)):
-                            step_sch = False
                     # Log average loss to Aim
                     run.track(avg_loss, name='avg_loss', step=scheduler.last_epoch, 
                               epoch=epoch+1, context={"subset":"small_test"})
 
-       # Step scheduler at the end of full test phase if not set to step in small 
-       # tests
+        # Step scheduler at the end of full test phase if not set to step in
+        # small tests
         if(not run_small_test and step_sch):
+            # Send average testing loss to scheduler
             scheduler.step(avg_loss)
-            # Check if learning rate was changed
+
+            # Change out scheduler parameters if necessary
             if(optimizer.param_groups[0]['lr'] < learning_rate):
                 # Save current learning rate
                 learning_rate = optimizer.param_groups[0]['lr']
@@ -617,27 +579,31 @@ def main(rank, world_size):
                     sch_state += 1
                     scheduler.factor = factors[sch_state]
                     scheduler.patience = patiences[sch_state]
-                    test_point = int(len(train_data)*test_points[sch_state])
-                # If learning rate will not be reduced by more than scheduler EPS, 
-                # then do not run small test anymore
-                if(not (learning_rate * (1-scheduler.factor) > scheduler.eps)):
+                    test_point = int(len(train_data) 
+                                     * test_points[sch_state])
+                # If learning rate will not be reduced by more than 
+                # scheduler EPS, then do not run small test anymore
+                if(not (learning_rate * (1-scheduler.factor) 
+                        > scheduler.eps)):
                     step_sch = False
 
-        # Save model and optimizer states
+
+        # Check if test was run without training  
         if(test_first and epoch < 1):
+            # Decrement epoch number so training starts at first epoch
             epoch -= 1
         else:
-            torch.save(model.state_dict(), 
-                       results_path+f"model{(epoch+1):02d}.pth")
-            torch.save(optimizer.state_dict(), 
-                       results_path+f"optimizer{(epoch+1):02d}.pth")
-            torch.save(scheduler.state_dict(), 
-                       results_path+f"scheduler{(epoch+1):02d}.pth")
+            # Save current model, optimizer, and scheduler states
+            saveStates(epoch)
 
         # Log average test loss to Aim
         run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                   context={"subset":"test"})
-    
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
+       
+    # If multi-GPU was used, cleanup before exiting 
     if(world_size != None):
         cleanup()
 
@@ -654,11 +620,13 @@ if __name__ == "__main__":
             else "cpu"
     )
     print(f"Using {device} device")
-
+   
+    # Check whether to use multi-GPU processing 
     if(run["hparams", "multigpu"] and device == cuda_device):
         n_gpus = torch.cuda.device_count()
         print(f"Using {n_gpus} GPUs")
         mp.spawn(main, args=[n_gpus], nprocs=n_gpus, join=True)
+    # Else, run on one device
     else:
         main(device, None)
 

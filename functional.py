@@ -10,29 +10,28 @@ import torchaudio.transforms as T
 
 class Functional():
 
-    def __init__(self, sample_rate, max_time, device, n_fft, hop_length):
+    def __init__(self, sample_rate=None, max_time=None, device=None, n_fft=None, hop_length=None, top_db=None, max_n_fft=None, augmentation_lbls=None):
         self.sample_rate = sample_rate
         self.max_time = max_time
         self.device = device
         self.n_fft = n_fft
         self.hop_length = hop_length
+        self.top_db = top_db
+        self.max_n_fft = max_n_fft
+        self.augmentation_lbls = augmentation_lbls
 
     def mean(self, tensor):
         return torch.sum(tensor)/torch.numel(tensor)
+    
+    def sum(self, tensor):
+        tensor = tensor[:,0,:] + tensor[:,1,:]  
+        tensor = tensor.unsqueeze(1)
+        return tensor
 
-    def wav_to_mel_db(self, tensor, n_mels=128, top_db=None):
-        mel = T.MelSpectrogram(sample_rate=self.sample_rate, n_fft=self.n_fft, hop_length=self.hop_length, 
-                               f_max=self.sample_rate>>1, n_mels=n_mels)
-        mel = mel.to(self.device)
-        amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
-        amp_to_db = amp_to_db.to(self.device)
-        
-        return amp_to_db(mel(tensor))
-
-    def wav_to_spec_db(self, tensor, top_db=None):
+    def wav_to_spec_db(self, tensor):
         pow_spec = T.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, power=2)
         pow_spec = pow_spec.to(self.device)
-        amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
+        amp_to_db = T.AmplitudeToDB("power", top_db=self.top_db)
         amp_to_db = amp_to_db.to(self.device)
         
         return amp_to_db(pow_spec(tensor))
@@ -42,18 +41,13 @@ class Functional():
         complex_spec = complex_spec.to(self.device)
         return  complex_spec(tensor)
 
-    def wav_to_db(self, tensor, top_db=None):
-        amp_to_db = T.AmplitudeToDB(stype="amplitude", hop_length=self.hop_length, top_db=top_db)
-        amp_to_db = amp_to_db.to(self.device)
-        return amp_to_db(tensor)
-
-    def db_stats(self, tensor, top_db=None, max_min=False):
+    def db_stats(self, tensor, max_min=False):
         # Convert input to complex spectrogram
         x = self.wav_to_complex(tensor)
 
         # Calculate magnitude of complex spectrogram
         x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
-        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=top_db)
+        amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=self.top_db)
         amp_to_db = amp_to_db.to(self.device)
         x = amp_to_db(x)
 
@@ -62,12 +56,6 @@ class Functional():
             return torch.std_mean(x) + (torch.max(x),torch.min(x),)
         else:
             return torch.std_mean(x)
-
-
-    def sum(self, tensor):
-        tensor = tensor[:,0,:] + tensor[:,1,:]  
-        tensor = tensor.unsqueeze(1)
-        return tensor
 
     def upsample(self, tensor, time):
         upsampler = nn.Upsample(time)
@@ -123,7 +111,7 @@ class Functional():
                             filelist.append([filename, time-self.max_time])
                     # Waveform is shorter than or equal to time cut off and 
                     # long enough for FFT, does not need to be split
-                    elif(time > self.n_fft):
+                    elif (time > self.max_n_fft):
                         filelist.append([filename, -1])
                     # Waveform not long enough for FFT, skip
                     else:
@@ -156,22 +144,26 @@ class Functional():
                 if(same_time):
                     return self.pad(tensor[:, split_start:])
                 # Return split part as-is if time is enough for FFT
-                elif(end_time > self.n_fft):
+                elif(end_time > self.max_n_fft):
                     return tensor[:, split_start:]
             # Split waveform fits in max_time, return waveform starting at 
             # time split_start with length max_time
             else:
                 return tensor[:, split_start:split_start+self.max_time]
 
+    # Get label filename from input filepath by removing augmentation label
+    def input_to_label_filepath(self, filepath):
+        file_ext = ".wav"
+        for lbl in self.augmentation_lbls:
+            filepath = filepath.replace(lbl+file_ext,file_ext)
+        return filepath
+
     # Return waveform 
     def process_wav(self, path, fileinfo, same_time, is_input=True):
         # Load waveform
         filename = fileinfo[0]
         if(not is_input):
-            filename = filename.replace("--01--.wav", ".wav")
-            filename = filename.replace("--10--.wav", ".wav")
-            filename = filename.replace("--11--.wav", ".wav")
-            filename = filename.replace("--20--.wav", ".wav")
+            filename = self.input_to_label_filepath(filename)
 
         wav_path = path + filename
         wav, sample_rate = torchaudio.load(wav_path)
@@ -196,11 +188,8 @@ class Functional():
         filename = fileinfo[0]
         input_wav_path = input_path + filename
         input_wav, input_sample_rate = torchaudio.load(input_wav_path)
-        label_wav_path = (label_path 
-                          + filename.replace("--01--.wav", ".wav"))
-        label_wav_path = label_wav_path.replace("--10--.wav", ".wav")
-        label_wav_path = label_wav_path.replace("--11--.wav", ".wav")
-        label_wav_path = label_wav_path.replace("--20--.wav", ".wav")
+        label_wav_path = (label_path + filename)
+        label_wav_path = self.input_to_label_filepath(label_wav_path)
         label_wav, label_sample_rate = torchaudio.load(label_wav_path)
 
         # Move waveforms to device
