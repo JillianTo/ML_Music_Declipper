@@ -3,7 +3,7 @@ import sys
 import math
 import pickle
 from audiodataset import AudioDataset
-from autoencoder import SpecAutoEncoder, WavAutoEncoder
+from autoencoder import AutoEncoder
 from functional import Functional
 
 import torch
@@ -15,7 +15,7 @@ import torchaudio.transforms as T
 # Parameters
 path = "/mnt/PC801/declip/"
 #path = "/mnt/MP600/data/comp/testDeclip/"
-weights_path = "/mnt/PC801/declip/results/model03.pth"
+weights_path = "/mnt/PC801/declip/results/model09.pth"
 #weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
 output_path = "/mnt/PC801/declip/new/"
 sample_rate = 44100
@@ -29,7 +29,7 @@ std = 15.4338 # Only used when pickle_stats=False
 spectrogram_autoencoder = True
 #part_time = 2250000
 #part_time = 1907500
-part_time = 3203072
+part_time = 5222400
 overlap_factor = 20
 extra_factor = 0.999
 fade_shape = 'logarithmic'
@@ -38,8 +38,8 @@ test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
-n_fft = [254, 1022, 8190]
-hop_length = [64, 256, 2048]
+n_fft = [8190]
+hop_length = [1024]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -67,12 +67,12 @@ if(pickle_stats):
 
 # Get files to declip
 funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, max_n_fft=max(n_fft)+2)
-dataset = AudioDataset(funct, path, None, same_time=False, pad_thres=999, 
+dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=999, 
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights
 if spectrogram_autoencoder:
-    model = SpecAutoEncoder(mean=mean, std=std, n_ffts=n_fft, hop_lengths=hop_length, sample_rate=sample_rate)
+    model = AutoEncoder(mean=mean, std=std, n_ffts=n_fft, hop_lengths=hop_length, sample_rate=sample_rate)
     print("Using spectrogram autoencoder")
 else:
     model = WavAutoEncoder(device)
@@ -250,3 +250,4 @@ with torch.no_grad():
 
     # Save complete waveform
     funct.save_wav(tensor, output_path+curr_filename)
+    print(f"Max VRAM used: {torch.cuda.max_memory_allocated(device={device})/1e9}GB")

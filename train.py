@@ -8,7 +8,7 @@ import pickle
 from autoclip.torch import QuantileClip
 
 from audiodataset import AudioDataset
-from autoencoder import SpecAutoEncoder, WavAutoEncoder
+from autoencoder import AutoEncoder
 from functional import Functional
 
 import torch
@@ -28,21 +28,23 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.0001,
+    "learning_rate": 0.00001,
     "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 100, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
-    #"uncompressed_data_path": "/mnt/MP600/data/small/uncomp/",
+    "uncompressed_data_path": "/mnt/MP600/data/small/uncomp/",
     "compressed_data_path": "/mnt/MP600/data/comp/train/",
-    #"compressed_data_path": "/mnt/MP600/data/small/comp/train/",
+    "compressed_data_path": "/mnt/MP600/data/small/comp/train/",
     "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
-    #"test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
+    "test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
     "results_path": "/mnt/PC801/declip/results/",
     "augmentation_labels": ["--01--","--10--","--11--","--20--"],
-    "max_time": 1880064,
-    "test_max_time": 4751360,
+    #"max_time": 1880064,
+    "max_time": 417792,
+    #"test_max_time": 4751360,
+    "test_max_time": 1638400,
     "num_workers": 0,
     "prefetch_factor": None,
     "pin_memory": False,
@@ -56,10 +58,12 @@ run["hparams"] = {
     "preload_scheduler_path": None,
     #"preload_scheduler_path": "/mnt/PC801/declip/results/04-08/scheduler08.pth",
     #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
-    "n_ffts": [254, 1022, 8190],
-    "hop_lengths": [64, 256, 2048],
-    "stats_n_fft": 1024,
-    "stats_hop_length": 512,
+    #"n_ffts": [510, 2046, 8190],
+    "n_ffts": [8190],
+    #"hop_lengths": [64, 256, 1024],
+    "hop_lengths": [256],
+    "stats_n_fft": 8192,
+    "stats_hop_length": 4096,
     "run_small_test": False,
     "eps": 0.00000001,
     "scheduler_state": 0,
@@ -70,7 +74,7 @@ run["hparams"] = {
     "test_first": False,
     "autoclip": True,
     "multigpu": False, # TODO: Does not work yet
-    "cuda_device": 1, # Choose which single GPU to use 
+    "cuda_device": 0, # Choose which single GPU to use 
 }
 
 # Set up DDP process groups
@@ -90,6 +94,7 @@ def main(rank, world_size):
     sample_rate = run["hparams", "expected_sample_rate"]
     batch_size = run["hparams", "batch_size"]
     test_batch_size = run["hparams", "test_batch_size"]
+    input_path = run["hparams", "compressed_data_path"]
     label_path = run["hparams", "uncompressed_data_path"]
     results_path = run["hparams", "results_path"]
     augmentation_lbls = run["hparams", "augmentation_labels"]
@@ -109,7 +114,8 @@ def main(rank, world_size):
     sch_state = run["hparams", "scheduler_state"]
     factors = run["hparams", "scheduler_factors"]
     patiences = run["hparams", "scheduler_patiences"]
-    overwrite_preload_sch = run["hparams", "overwrite_preloaded_scheduler_values"]
+    overwrite_preload_sch = run["hparams",
+                                "overwrite_preloaded_scheduler_values"]
     test_points = run["hparams", "test_points"]
     test_first = run["hparams", "test_first"]
     autoclip = run["hparams", "autoclip"]
@@ -122,56 +128,67 @@ def main(rank, world_size):
     print("\nLoading data...")
 
     # Add inputs and labels to training dataset
-    funct = Functional(sample_rate=sample_rate, max_time=max_time, device=rank, n_fft=stats_n_fft, hop_length=stats_hop_length, max_n_fft=max(n_ffts)+2, augmentation_lbls=augmentation_lbls)
+    funct = Functional(sample_rate=sample_rate, max_time=max_time, device=rank, 
+                       n_fft=stats_n_fft, hop_length=stats_hop_length, 
+                       top_db=106, max_n_fft=max(n_ffts)+2, 
+                       augmentation_lbls=augmentation_lbls)
     if(batch_size > 1):
         train_data = AudioDataset(funct, 
-                                     run["hparams", "compressed_data_path"], 
-                                     "filelist_train.txt", 
-                                     label_path=label_path, 
-                                     pad_thres=2)
+                                  input_path, 
+                                  "filelist_train.txt", 
+                                  label_path=label_path, 
+                                  short_thres=2)
     else:
         train_data = AudioDataset(funct, 
-                                     run["hparams", "compressed_data_path"], 
-                                     #None,
-                                     "filelist_train.txt", 
-                                     same_time=False, 
-                                     pad_thres=2)
+                                  input_path, 
+                                  "filelist_train.txt", 
+                                  pad_short=False, 
+                                  short_thres=2)
     print(f"Added {len(train_data)} file pairs to training data")
 
     # Add inputs and labels to test dataset
-    test_funct = Functional(sample_rate=sample_rate, max_time=test_max_time, device=rank, n_fft=stats_n_fft, hop_length=stats_hop_length, max_n_fft=max(n_ffts)+2, augmentation_lbls=augmentation_lbls)
+    test_funct = Functional(sample_rate=sample_rate, max_time=test_max_time, 
+                            device=rank, n_fft=stats_n_fft, 
+                            hop_length=stats_hop_length, top_db=106,
+                            max_n_fft=max(n_ffts)+2, 
+                            augmentation_lbls=augmentation_lbls)
     if(test_batch_size > 1):
         test_data = AudioDataset(test_funct, 
                                  run["hparams", "test_compressed_data_path"], 
                                  "filelist_test.txt", 
                                  label_path=label_path, 
-                                 pad_thres=2)
+                                 short_thres=2)
     else:
         test_data = AudioDataset(test_funct, 
                                  run["hparams", "test_compressed_data_path"], 
-                                 #None,
                                  "filelist_test.txt", 
-                                 same_time=False, 
-                                 pad_thres=2)
+                                 pad_short=False, 
+                                 short_thres=2)
     print(f"Added {len(test_data)} file pairs to test data")
 
     # If using multi-GPU, set up sampleres and dataloaders accordingly
     if(world_size != None):
         # Create samplers
-        train_sampler = DistributedSampler(train_data, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
-        test_sampler = DistributedSampler(test_data, num_replicas=world_size, rank=rank, shuffle=False, drop_last=False)
+        train_sampler = DistributedSampler(train_data, num_replicas=world_size, 
+                                           rank=rank, shuffle=False, 
+                                           drop_last=False)
+        test_sampler = DistributedSampler(test_data, num_replicas=world_size, 
+                                          rank=rank, shuffle=False, 
+                                          drop_last=False)
         print("Using distributed samplers for training/testing data")
 
         # Create data loader for training data 
         trainloader = DataLoader(train_data, batch_size=batch_size, 
                                  shuffle=False, num_workers=num_workers, 
                                  pin_memory=pin_memory, 
-                                 prefetch_factor=prefetch_factor, sampler=train_sampler)
+                                 prefetch_factor=prefetch_factor, 
+                                 sampler=train_sampler)
         # Create data loader for test data 
         testloader = DataLoader(test_data, batch_size=test_batch_size, 
                                 shuffle=False, num_workers=num_workers, 
                                 pin_memory=pin_memory, 
-                                prefetch_factor=prefetch_factor, sampler=test_sampler)
+                                prefetch_factor=prefetch_factor, 
+                                sampler=test_sampler)
     # Else, set up dataloaders for single device
     else:
         # Create data loader for training data, enable shuffle if not using DDP
@@ -192,26 +209,14 @@ def main(rank, world_size):
             db_stats = pickle.load(f)
             mean = db_stats[0]
             std = db_stats[1]
-            print(f"Loaded stats from \"stats_path\" with mean {mean} and std {std}")
+            print(f"Loaded stats from \"stats_path\" with mean {mean} and std "
+                  f"{std}")
     # Else, calculate stats for training data
     else:
         print("Calculating mean and std...")
-        mean = 0
-        std = 0
-        total = len(trainloader)
-        pbar = tqdm(enumerate(trainloader), total=total, 
-                    desc=f"Train Set Stats")
-
-        for i, (comp_wav, _) in pbar:
-            curr_std, curr_mean = funct.db_stats(comp_wav)
-            mean = mean + curr_mean
-            std = std + curr_std
-
-            pbar.set_postfix({"Mean": f"{curr_mean:.4f}", 
-                              "Std Dev": f"{curr_std:.4f}"})
-
-        mean = (mean / total).item()
-        std = (std / total).item()
+        mean, std = funct.db_stats(input_path)
+        mean = mean.item()
+        std = std.item()
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")
         with open(stats_path, 'wb') as f:
             pickle.dump([mean,std], f)
@@ -221,15 +226,18 @@ def main(rank, world_size):
 
     # Initialize model
     if run["hparams", "spectrogram_autoencoder"]:
-        model = SpecAutoEncoder(mean=mean, std=std, n_ffts=n_ffts, hop_lengths=hop_lengths, sample_rate=sample_rate)
+        model = AutoEncoder(mean=mean, std=std, n_ffts=n_ffts, 
+                            hop_lengths=hop_lengths, 
+                            sample_rate=sample_rate)
         print("Using spectrogram autoencoder")
-    else:
-        model = WavAutoEncoder(rank)
-        print("Using waveform autoencoder")
+    #else:
+        #model = WavAutoEncoder(rank)
+        #print("Using waveform autoencoder")
     model = model.to(rank)
     # If using multi-GPU, set up DDP
     if(world_size != None):
-        model = DDP(model, device_ids=[rank],output_device=rank,find_unused_parameters=True)
+        model = DDP(model, device_ids=[rank], output_device=rank,
+                    find_unused_parameters=True)
 
     # Load model weights from path if given
     if preload_weights_path != None:
@@ -241,7 +249,9 @@ def main(rank, world_size):
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
     # If enabled, add AutoClip to optimizer
     if autoclip:
-        optimizer = QuantileClip.as_optimizer(optimizer=optimizer, quantile=0.9, history_length=1000)
+        optimizer = QuantileClip.as_optimizer(optimizer=optimizer, 
+                                              quantile=0.9, 
+                                              history_length=1000)
         print("Using autoclip")
     # Load saved optimizer from path if given
     if preload_opt_path != None:
@@ -367,6 +377,10 @@ def main(rank, world_size):
     # Training Loop
     print("\nStarting training loop...")
     for epoch in range(run["hparams", "num_epochs"]):
+        # Clear CUDA cache
+        #print(torch.cuda.max_memory_allocated(device=rank))
+        #torch.cuda.empty_cache()
+
         # Check if test should be run first
         if(not (epoch < 1 and test_first)):
             # Initialize total and average training loss to zero
@@ -381,9 +395,9 @@ def main(rank, world_size):
                 # Set model to train state
                 model.train()
 
-                # Zero the gradients of all optimized variables. This is to ensure 
-                # that we don't accumulate gradients from previous batches, as 
-                # gradients are accumulated by default in PyTorch
+                # Zero the gradients of all optimized variables. This is to 
+                # ensure that we don't accumulate gradients from previous 
+                # batches, as gradients are accumulated by default in PyTorch
                 optimizer.zero_grad(set_to_none=True)
 
                 # Forward pass
@@ -397,13 +411,15 @@ def main(rank, world_size):
 
                 # Force stop if loss is nan
                 if(loss != loss):
-                    sys.exit(f"Training loss is {loss} during \"{fileinfo[0]}\", force exiting")
+                    sys.exit(f"Training loss is {loss} during \"{fileinfo[0]}"
+                             f"\", force exiting")
 
-                # Backward pass: compute the gradient of the loss with respect to 
-                # model parameters
+                # Backward pass: compute the gradient of the loss with respect
+                # to model parameters
                 loss.backward()
 
-                # Update the model's parameters using the optimizer's step method
+                # Update the model's parameters using the optimizer's step 
+                # method
                 optimizer.step()
 
                 # Add loss to total
@@ -413,8 +429,8 @@ def main(rank, world_size):
                 avg_loss = tot_loss / (i+1)
 
                 # Log loss to Aim
-                run.track(loss.item(), name='loss', step=train_step, epoch=epoch+1, 
-                          context={"subset":"train"})
+                run.track(loss.item(), name='loss', step=train_step, 
+                          epoch=epoch+1, context={"subset":"train"})
 
                 # Update tqdm progress bar 
                 pbar.set_postfix({"Loss": f"{loss.item():.4f}", 
@@ -433,7 +449,8 @@ def main(rank, world_size):
                             model.eval()
                             # Don't update gradients during validation
                             with torch.no_grad():
-                                # Initialize total and average small test loss to zero
+                                # Initialize total and average small test loss 
+                                # to zero
                                 tot_test_loss = 0
                                 avg_test_loss = 0
                                 # Initialize tqdm progress bar for small test
@@ -444,7 +461,8 @@ def main(rank, world_size):
                                 
                                 # Small test phase
                                 for i, (comp_wav, fileinfo) in test_pbar:
-                                    # Stop small test after small_test_end batches
+                                    # Stop small test after small_test_end 
+                                    # batches
                                     if(i > small_test_end):
                                         break
 
@@ -452,7 +470,8 @@ def main(rank, world_size):
                                     comp_wav = model(comp_wav)
 
                                     # Get target waveform
-                                    uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
+                                    uncomp_wav = getTgt(test_batch_size, 
+                                                        fileinfo, test_funct)
 
                                     # Calculate loss
                                     loss = calcLoss(comp_wav, uncomp_wav)
@@ -473,13 +492,13 @@ def main(rank, world_size):
                                     # Increment step for next Aim log
                                     small_test_step += 1
 
-                                    # Update tqdm progress bar with fixed 
-                                    # number of decimals for loss
+                                    # Update tqdm progress bar
                                     test_pbar.set_postfix(
                                             {"Loss": f"{loss.item():.4f}", 
                                              "Avg Loss": f"{avg_test_loss:.4f}"})
 
-                            # Send average loss from this small test to scheduler
+                            # Send average loss from this small test to 
+                            # scheduler
                             scheduler.step(avg_test_loss)
 
                             # Log average test loss and to Aim and CLI
@@ -488,18 +507,21 @@ def main(rank, world_size):
                                       context={"subset":"small_test"})
                             
                             # Check if learning rate was changed
-                            if(optimizer.param_groups[0]['lr'] < learning_rate):
+                            if(optimizer.param_groups[0]['lr'] 
+                               < learning_rate):
                                 # Save current learning rate
                                 learning_rate = optimizer.param_groups[0]['lr']
-                                # Change scheduler parameters after learning rate reduction
+                                # Change scheduler parameters after learning 
+                                # rate reduction
                                 if(sch_state < sch_change):
                                     sch_state += 1
                                     scheduler.factor = factors[sch_state]
                                     scheduler.patience = patiences[sch_state]
                                     test_point = int(len(train_data) 
                                                      * test_points[sch_state])
-                                # If learning rate will not be reduced by more than 
-                                # scheduler EPS, then do not run small test anymore
+                                # If learning rate will not be reduced by more 
+                                # than scheduler EPS, then do not run small 
+                                # test anymore
                                 if(not (learning_rate * (1-scheduler.factor) 
                                         > scheduler.eps)):
                                     step_sch = False
@@ -512,6 +534,7 @@ def main(rank, world_size):
                       context={"subset":"train"})
             
             # Clear CUDA cache
+            print(torch.cuda.max_memory_allocated(device=rank))
             torch.cuda.empty_cache()
 
         # Set model to validation state
@@ -543,8 +566,8 @@ def main(rank, world_size):
                 avg_loss = tot_loss / (i+1)
 
                 # Log loss to Aim
-                run.track(loss.item(), name='loss', step=test_step, epoch=epoch+1, 
-                          context={"subset":"test"})
+                run.track(loss.item(), name='loss', step=test_step, 
+                          epoch=epoch+1, context={"subset":"test"})
                 if(not (i > small_test_end) and run_small_test):
                     run.track(loss.item(), name='loss', step=small_test_step, 
                               epoch=epoch+1, context={"subset":"small_test"})
@@ -552,7 +575,7 @@ def main(rank, world_size):
                 # Increment step for next Aim log
                 test_step += 1
 
-                # Update tqdm progress bar with fixed number of decimals for loss
+                # Update tqdm progress bar 
                 pbar.set_postfix({"Loss": f"{loss.item():.4f}", 
                                   "Avg Loss": f"{avg_loss:.4f}"}) 
 
@@ -561,8 +584,11 @@ def main(rank, world_size):
                     # Send average small test loss to scheduler
                     scheduler.step(avg_loss)
                     # Log average loss to Aim
-                    run.track(avg_loss, name='avg_loss', step=scheduler.last_epoch, 
-                              epoch=epoch+1, context={"subset":"small_test"})
+                    run.track(avg_loss, name='avg_loss', 
+                              step=scheduler.last_epoch, epoch=epoch+1, 
+                              context={"subset":"small_test"})
+
+                torch.cuda.empty_cache()
 
         # Step scheduler at the end of full test phase if not set to step in
         # small tests
@@ -600,9 +626,6 @@ def main(rank, world_size):
         run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                   context={"subset":"test"})
         
-        # Clear CUDA cache
-        torch.cuda.empty_cache()
-       
     # If multi-GPU was used, cleanup before exiting 
     if(world_size != None):
         cleanup()
