@@ -11,7 +11,7 @@ class AutoEncoder(nn.Module):
     def __init__(self, mean, std, n_ffts, hop_lengths, sample_rate, top_db=106,
                  in_channels=2, first_out_channels=32, kernel_size_1=(3,3), 
                  kernel_size_2=(3,3), kernel_size_3=(3,3), stride_1=(1,1), 
-                 stride_2=(1,1), stride_3=(2,2), dropout=0.0):
+                 stride_2=(1,1), stride_3=(2,2), dropout=0.4):
         super(AutoEncoder, self).__init__(),
 
         self.mean = mean
@@ -24,7 +24,7 @@ class AutoEncoder(nn.Module):
         self.num_n_fft = len(n_ffts)
         self.center_idx = int(self.num_n_fft/2)
 
-        tanh_lims = [8, 8, 8, 8, 8, 8, 8]
+        tanh_lims = [16.0, 16.0, 16.0, 16.0, 16.0, 16.0, 16.0]
 
         # Encoder layers
         self.enc1 = nn.Sequential(
@@ -174,29 +174,30 @@ class AutoEncoder(nn.Module):
         )
 
         # Set HardTanh limit to same as last used encoder layer
-        lstm_idx = 4-1 
+        lstm_idx = 5
+
+        # Set LSTM input and hidden size to last number of frequency dims
+        lstm_input_size = (n_ffts[self.center_idx]+2)>>lstm_idx
 
         # Set LSTM channels to output channels of last used encoder layer 
-        lstm_channels = first_out_channels<<lstm_idx
+        lstm_channels = first_out_channels<<(lstm_idx-1)
 
         # Long-short term memory
-        self.lstm = nn.Sequential(
-            nn.LayerNorm(lstm_channels),
-            nn.LSTM(input_size=lstm_channels, hidden_size=lstm_channels>>1, 
-                    num_layers=3, batch_first=True, dropout=dropout, 
-                    bidirectional=True),
-        )
+        self.lstm = nn.LSTM(input_size=lstm_input_size, 
+                            hidden_size=lstm_input_size, num_layers=6, 
+                            batch_first=True, dropout=dropout, 
+                            bidirectional=True)
 
         # Decoder layers
         self.up_conv_lstm = nn.Sequential(
             nn.ConvTranspose2d(in_channels=lstm_channels, 
                                out_channels=lstm_channels,
-                               kernel_size=kernel_size_3, stride=stride_3, 
+                               kernel_size=kernel_size_3, stride=(1,2), 
                                padding=1),
             nn.Conv2d(in_channels=lstm_channels, 
                       out_channels=lstm_channels>>1, 
                       kernel_size=kernel_size_2, stride=stride_2, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[lstm_idx], max_val=tanh_lims[lstm_idx]),
+            nn.Hardtanh(min_val=-tanh_lims[lstm_idx-1], max_val=tanh_lims[lstm_idx-1]),
             #nn.GroupNorm(lstm_channels>>2, lstm_channels>>1),
         )
         self.dec6 = nn.Sequential(
@@ -404,7 +405,8 @@ class AutoEncoder(nn.Module):
 
             # Standardize magnitude
             ffts[i] = (ffts[i]-self.mean)/self.std
-            
+        
+        # If using multiple FFT resolutions, merge them    
         if(self.num_n_fft > 1):
             num_batch = ffts[0].size(0)
             last_idx = self.num_n_fft-1
@@ -429,6 +431,7 @@ class AutoEncoder(nn.Module):
             # Concatenate all tensors along channel dimension
             x = torch.cat(ffts, dim=1)
             # Run corresponding first encoder layer
+            #e1 = self.enc1b(x)
             match(self.num_n_fft):
                 case 2:
                     e1 = self.enc1b(x)
@@ -436,15 +439,26 @@ class AutoEncoder(nn.Module):
                     e1 = self.enc1c(x)
                 case _:
                     sys.exit("Number of FFT resolutions not supported!")
+
         else:
             e1 = self.enc1(ffts[0])
 
         # Save encoder layers for skip connections
+        #print(torch.max(e1))
+        #print(torch.min(e1))
         e2 = self.enc2(e1)
+        #print(torch.max(e2))
+        #print(torch.min(e2))
         e3 = self.enc3(e2)
-        x = self.enc4(e3)
-        #e4 = self.enc4(e3)
-        #x = self.enc5(e4)
+        #print(torch.max(e3))
+        #print(torch.min(e3))
+        #x = self.enc4(e3)
+        e4 = self.enc4(e3)
+        #print(torch.max(e4))
+        #print(torch.min(e4))
+        x = self.enc5(e4)
+        #print(torch.max(x))
+        #print(torch.min(x))
         #e5 = self.enc5(e4)
         #x = self.enc6(e5)
         #e6 = self.enc6(e5)
@@ -453,9 +467,9 @@ class AutoEncoder(nn.Module):
         # Flatten encoder output and rearrange to use with LSTM
         freq_dim = x.size(2)
         time_dim = x.size(3)
-        x = x.reshape(x.size(0), freq_dim*time_dim, x.size(1))
+        x = x.reshape(x.size(0), x.size(1)*time_dim, freq_dim)
         x, _ = self.lstm(x)
-        x = x.reshape(x.size(0), x.size(2), freq_dim, time_dim)
+        x = x.reshape(x.size(0), -1, x.size(2), time_dim)
 
         # Decoder
         x = self.up_conv_lstm(x)
@@ -469,11 +483,11 @@ class AutoEncoder(nn.Module):
         #x = dec_upsample(x)
         #x = torch.cat((x, e5), dim=1)
         #x = self.up_conv5(self.dec5(x))
-        #dec_upsample = nn.Upsample(size=[e4.shape[2], e4.shape[3]])
-        #dec_upsample = dec_upsample.to(device)
-        #x = dec_upsample(x)
-        #x = torch.cat((x, e4), dim=1)
-        #x = self.up_conv4(self.dec4(x))
+        dec_upsample = nn.Upsample(size=[e4.shape[2], e4.shape[3]])
+        dec_upsample = dec_upsample.to(device)
+        x = dec_upsample(x)
+        x = torch.cat((x, e4), dim=1)
+        x = self.up_conv4(self.dec4(x))
         dec_upsample = nn.Upsample(size=[e3.shape[2], e3.shape[3]])
         dec_upsample = dec_upsample.to(device)
         x = dec_upsample(x)
@@ -499,7 +513,7 @@ class AutoEncoder(nn.Module):
                 x = self.dec1c(x)
             case _:
                 sys.exit("Number of FFT resolutions not supported!")
-      
+
         # Split decoder output into the different FFTs and do inverse FFT 
         start_ch = 0
         end_ch = 2 

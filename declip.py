@@ -15,7 +15,7 @@ import torchaudio.transforms as T
 # Parameters
 path = "/mnt/PC801/declip/"
 #path = "/mnt/MP600/data/comp/testDeclip/"
-weights_path = "/mnt/PC801/declip/results/model09.pth"
+weights_path = "/mnt/PC801/declip/results/model01.pth"
 #weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
 output_path = "/mnt/PC801/declip/new/"
 sample_rate = 44100
@@ -27,9 +27,7 @@ std = 15.4338 # Only used when pickle_stats=False
 #std = 13.8257
 #std = 13.9869
 spectrogram_autoencoder = True
-#part_time = 2250000
-#part_time = 1907500
-part_time = 5222400
+part_time = 1433600
 overlap_factor = 20
 extra_factor = 0.999
 fade_shape = 'logarithmic'
@@ -39,7 +37,7 @@ norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
 n_fft = [8190]
-hop_length = [1024]
+hop_length = [256]
 
 # Get CPU, GPU, or MPS device for inference
 device = (

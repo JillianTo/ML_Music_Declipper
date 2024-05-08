@@ -28,37 +28,36 @@ run = Run(experiment="declipper")
 
 # Log run parameters
 run["hparams"] = {
-    "learning_rate": 0.00001,
+    "learning_rate": 0.00003,
     "batch_size": 1,
     "test_batch_size": 1,
     "num_epochs": 100, 
     "expected_sample_rate": 44100,
     "uncompressed_data_path": "/mnt/MP600/data/uncomp/",
-    "uncompressed_data_path": "/mnt/MP600/data/small/uncomp/",
+    #"uncompressed_data_path": "/mnt/MP600/data/small/uncomp/",
     "compressed_data_path": "/mnt/MP600/data/comp/train/",
-    "compressed_data_path": "/mnt/MP600/data/small/comp/train/",
+    #"compressed_data_path": "/mnt/MP600/data/small/comp/strain/",
     "test_compressed_data_path": "/mnt/MP600/data/comp/test/",
-    "test_compressed_data_path": "/mnt/MP600/data/small/comp/test/",
+    #"test_compressed_data_path": "/mnt/MP600/data/small/comp/stest/",
     "results_path": "/mnt/PC801/declip/results/",
     "augmentation_labels": ["--01--","--10--","--11--","--20--"],
-    #"max_time": 1880064,
-    "max_time": 417792,
-    #"test_max_time": 4751360,
-    "test_max_time": 1638400,
-    "num_workers": 0,
-    "prefetch_factor": None,
-    "pin_memory": False,
+    "max_time": 655360,
+    "test_max_time": 2048000,
+    "num_workers": 8,
+    "pin_memory": True,
     "spectrogram_autoencoder": True,
     "preload_weights_path": None,
-    #"preload_weights_path": "/mnt/PC801/declip/results/04-08/model08.pth",
+    #"preload_weights_path": "/mnt/PC801/declip/results/05-07/model01.pth",
     #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
     "preload_optimizer_path": None,
-    #"preload_optimizer_path": "/mnt/PC801/declip/results/04-08/optimizer08.pth",
+    #"preload_optimizer_path": "/mnt/PC801/declip/results/05-07/optimizer01.pth",
     #"preload_optimizer_path": "/mnt/PC801/declip/results/optimizer01.pth",
     "preload_scheduler_path": None,
-    #"preload_scheduler_path": "/mnt/PC801/declip/results/04-08/scheduler08.pth",
+    #"preload_scheduler_path": "/mnt/PC801/declip/results/05-07/scheduler01.pth",
     #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
     #"n_ffts": [510, 2046, 8190],
+    "preload_scaler_path": None,
+    #"preload_scaler_path": "/mnt/PC801/declip/results/05-07/scaler01.pth",
     "n_ffts": [8190],
     #"hop_lengths": [64, 256, 1024],
     "hop_lengths": [256],
@@ -67,14 +66,15 @@ run["hparams"] = {
     "run_small_test": False,
     "eps": 0.00000001,
     "scheduler_state": 0,
-    "scheduler_factors": [0.1, 0.1, 0.1],
-    "scheduler_patiences": [0, 2, 4],
-    "test_points": [0.125, 0.25,  0.5],
+    "scheduler_factors": [1/3, 0.1, 0.1, 0.1],
+    "scheduler_patiences": [0, 2, 4, 6],
+    "test_points": [0.0625, 0.125, 0.25,  0.5],
     "overwrite_preloaded_scheduler_values": False,
     "test_first": False,
     "autoclip": True,
     "multigpu": False, # TODO: Does not work yet
     "cuda_device": 0, # Choose which single GPU to use 
+    "use_amp": True,
 }
 
 # Set up DDP process groups
@@ -101,11 +101,11 @@ def main(rank, world_size):
     max_time = run["hparams", "max_time"]
     test_max_time = run["hparams", "test_max_time"]
     num_workers = run["hparams", "num_workers"]
-    prefetch_factor = run["hparams", "prefetch_factor"]
     pin_memory = run["hparams", "pin_memory"]
     preload_weights_path = run["hparams", "preload_weights_path"]
     preload_opt_path = run["hparams", "preload_optimizer_path"]
     preload_sch_path = run["hparams", "preload_scheduler_path"]
+    preload_scaler_path = run["hparams", "preload_scaler_path"]
     n_ffts = run["hparams", "n_ffts"]
     hop_lengths = run["hparams", "hop_lengths"]
     stats_n_fft = run["hparams", "stats_n_fft"]
@@ -119,6 +119,7 @@ def main(rank, world_size):
     test_points = run["hparams", "test_points"]
     test_first = run["hparams", "test_first"]
     autoclip = run["hparams", "autoclip"]
+    use_amp = run["hparams", "use_amp"]
 
     if(world_size != None):
         # Set up process groups
@@ -179,28 +180,18 @@ def main(rank, world_size):
 
         # Create data loader for training data 
         trainloader = DataLoader(train_data, batch_size=batch_size, 
-                                 shuffle=False, num_workers=num_workers, 
-                                 pin_memory=pin_memory, 
-                                 prefetch_factor=prefetch_factor, 
-                                 sampler=train_sampler)
+                                 shuffle=False, sampler=train_sampler, num_workers=num_workers, pin_memory=pin_memory)
         # Create data loader for test data 
         testloader = DataLoader(test_data, batch_size=test_batch_size, 
-                                shuffle=False, num_workers=num_workers, 
-                                pin_memory=pin_memory, 
-                                prefetch_factor=prefetch_factor, 
-                                sampler=test_sampler)
+                                shuffle=False, sampler=test_sampler, num_workers=num_workers, pin_memory=pin_memory)
     # Else, set up dataloaders for single device
     else:
         # Create data loader for training data, enable shuffle if not using DDP
         trainloader = DataLoader(train_data, batch_size=batch_size, 
-                                 shuffle=True, num_workers=num_workers, 
-                                 pin_memory=pin_memory, 
-                                 prefetch_factor=prefetch_factor)
+                                 shuffle=True, num_workers=num_workers, pin_memory=pin_memory) 
         # Create data loader for test data 
         testloader = DataLoader(test_data, batch_size=test_batch_size, 
-                                shuffle=False, num_workers=num_workers, 
-                                pin_memory=pin_memory, 
-                                prefetch_factor=prefetch_factor)
+                                shuffle=False, num_workers=num_workers, pin_memory=pin_memory) 
 
     # Load stats from file if available
     stats_path = "db_stats.txt"
@@ -280,6 +271,12 @@ def main(rank, world_size):
             scheduler.patience = patiences[sch_state]
         print(f"Preloaded scheduler from \"{preload_sch_path}\" with factor "
               f"{scheduler.factor} and patience {scheduler.patience}")
+
+    # Initialize gradient scaler
+    scaler = torch.cuda.amp.GradScaler(enabled=use_amp) 
+    if preload_scaler_path != None:
+        scaler.load_state_dict(torch.load(preload_scaler_path))
+        print(f"Preloaded scaler from \"{preload_scaler_path}\"")
     
     # Do not run small test if learning rate will not be reduced by more than 
     # scheduler EPS
@@ -298,6 +295,8 @@ def main(rank, world_size):
                    +f"optimizer{(epoch+1):02d}.pth")
         torch.save(scheduler.state_dict(), results_path 
                    +f"scheduler{(epoch+1):02d}.pth")
+        torch.save(scaler.state_dict(), results_path
+                   +f"scaler{(epoch+1):02d}.pth")
 
     # Initialize loss functions
     fft_sizes = [256, 512, 1024]
@@ -378,8 +377,7 @@ def main(rank, world_size):
     print("\nStarting training loop...")
     for epoch in range(run["hparams", "num_epochs"]):
         # Clear CUDA cache
-        #print(torch.cuda.max_memory_allocated(device=rank))
-        #torch.cuda.empty_cache()
+        torch.cuda.empty_cache()
 
         # Check if test should be run first
         if(not (epoch < 1 and test_first)):
@@ -401,13 +399,17 @@ def main(rank, world_size):
                 optimizer.zero_grad(set_to_none=True)
 
                 # Forward pass
-                comp_wav = model(comp_wav)
+                with torch.autocast(device_type="cuda", enabled=use_amp, 
+                                    dtype=torch.float16):
+                    comp_wav = comp_wav.to(rank)
+                    comp_wav = model(comp_wav)
 
-                # Get target waveform
-                uncomp_wav = getTgt(batch_size, fileinfo, funct)
-                
-                # Calculate loss
-                loss = calcLoss(comp_wav, uncomp_wav)
+                    # Get target waveform
+                    uncomp_wav = getTgt(batch_size, fileinfo, funct)
+                    uncomp_wav = uncomp_wav.to(rank)
+                    
+                    # Calculate loss
+                    loss = calcLoss(comp_wav, uncomp_wav)
 
                 # Force stop if loss is nan
                 if(loss != loss):
@@ -416,11 +418,27 @@ def main(rank, world_size):
 
                 # Backward pass: compute the gradient of the loss with respect
                 # to model parameters
-                loss.backward()
+                scaler.scale(loss).backward()
+                #print(funct.mean(abs(model.enc1[3].weight.grad)))
+                #print(funct.mean(abs(model.enc2[4].weight.grad)))
+                #print(funct.mean(abs(model.enc3[4].weight.grad)))
+                #print(funct.mean(abs(model.enc4[4].weight.grad)))
+                #print(funct.mean(abs(model.enc5[4].weight.grad)))
+                #print(funct.mean(abs(model.enc6[4].weight.grad)))
+                #print(funct.mean(abs(model.enc7[4].weight.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l0.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l1.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l2.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l3.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l4.grad)))
+                #print(funct.mean(abs(model.lstm.weight_ih_l5.grad)))
 
                 # Update the model's parameters using the optimizer's step 
                 # method
-                optimizer.step()
+                #optimizer.step()
+                scaler.unscale_(optimizer)
+                scaler.step(optimizer)
+                scaler.update()
 
                 # Add loss to total
                 tot_loss += loss.item()
@@ -466,15 +484,21 @@ def main(rank, world_size):
                                     if(i > small_test_end):
                                         break
 
-                                    # Forward pass
-                                    comp_wav = model(comp_wav)
+                                    with torch.autocast(device_type="cuda", 
+                                                        enabled=use_amp, 
+                                                        dtype=torch.float16):
+                                        # Forward pass
+                                        comp_wav = comp_wav.to(rank)
+                                        comp_wav = model(comp_wav)
 
-                                    # Get target waveform
-                                    uncomp_wav = getTgt(test_batch_size, 
-                                                        fileinfo, test_funct)
+                                        # Get target waveform
+                                        uncomp_wav = getTgt(test_batch_size, 
+                                                            fileinfo, 
+                                                            test_funct)
+                                        uncomp_wav = uncomp_wav.to(rank)
 
-                                    # Calculate loss
-                                    loss = calcLoss(comp_wav, uncomp_wav)
+                                        # Calculate loss
+                                        loss = calcLoss(comp_wav, uncomp_wav)
 
                                     # Add loss to total
                                     tot_test_loss += loss.item()
@@ -534,7 +558,6 @@ def main(rank, world_size):
                       context={"subset":"train"})
             
             # Clear CUDA cache
-            print(torch.cuda.max_memory_allocated(device=rank))
             torch.cuda.empty_cache()
 
         # Set model to validation state
@@ -550,14 +573,18 @@ def main(rank, world_size):
 
             # Testing phase
             for i, (comp_wav, fileinfo) in pbar:
-                # Forward pass
-                comp_wav = model(comp_wav)
+                with torch.autocast(device_type="cuda", enabled=use_amp, 
+                                    dtype=torch.float16):
+                    # Forward pass
+                    comp_wav = comp_wav.to(rank)
+                    comp_wav = model(comp_wav)
 
-                # Get target waveform
-                uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
+                    # Get target waveform
+                    uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
+                    uncomp_wav = uncomp_wav.to(rank)
 
-                # Calculate loss
-                loss = calcLoss(comp_wav, uncomp_wav)
+                    # Calculate loss
+                    loss = calcLoss(comp_wav, uncomp_wav)
 
                 # Add loss to total
                 tot_loss += loss.item()
@@ -634,6 +661,9 @@ def main(rank, world_size):
 
 if __name__ == "__main__":
     # Get CPU, GPU, or MPS device for training
+    torch.backends.cudnn.benchmark = True
+    torch.backends.cuda.matmul.allow_tf32 = True
+    torch.backends.cudnn.allow_tf32 = True
     cuda_device = f"cuda:{run['hparams', 'cuda_device']}"
     device = (
             cuda_device

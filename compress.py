@@ -9,7 +9,7 @@ from functional import Functional
 xo_freqs = [100, 400, 1600, 6400]
 attack_delay = ["0.005,0.1", "0.003,0.05", "0.000625,0.0125", "0.0001,0.025", "0,0.025"]
 #input_path = "/mnt/MP600/data/uncomp/"
-input_path = "/mnt/MP600/data/new/uncomp/"
+input_path = "/mnt/MP600/data/resample/"
 #input_path = "/mnt/MP600/data/small/uncomp/"
 #input_path = "/mnt/PC801/declip/"
 tmp_path = "/mnt/MP600/data/comp/tmp/"

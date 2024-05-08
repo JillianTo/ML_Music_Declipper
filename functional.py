@@ -195,7 +195,7 @@ class Functional():
         wav, sample_rate = torchaudio.load(wav_path)
 
         # Move waveform to device
-        wav = wav.to(self.device)
+        #wav = wav.to(self.device)
 
         # Resample if not expected sample rate
         if(sample_rate != self.sample_rate):
@@ -220,8 +220,8 @@ class Functional():
         label_wav, label_sample_rate = torchaudio.load(label_wav_path)
 
         # Move waveforms to device
-        input_wav = input_wav.to(self.device)
-        label_wav = label_wav.to(self.device)
+        #input_wav = input_wav.to(self.device)
+        #label_wav = label_wav.to(self.device)
 
         # Resample if not expected sample rate
         if(input_sample_rate != self.sample_rate):
