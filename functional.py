@@ -118,10 +118,7 @@ class Functional():
                     # Waveform is longer than time cut-off, needs to be split
                     if(time > self.max_time):
                         # Calculate time that parts will overlap
-                        if(overlap_factor == None):
-                            overlap_time = 0
-                        else:
-                            overlap_time = int(self.max_time/overlap_factor)
+                        overlap_time = int(self.max_time*overlap_factor)
                         # Calculate leftover of waveform after being parted out
                         remainder = time % (self.max_time-overlap_time)
                         # Round down number of parts to split
@@ -133,7 +130,7 @@ class Functional():
                                                         -(overlap_time*i))])
                         # If remainder is greater than threshold, add 
                         # waveform ending at end of file with length max_time
-                        if(remainder > (self.max_time/short_thres)):
+                        if(remainder > (self.max_time*short_thres)):
                             filelist.append([filename, time-self.max_time])
                     # Waveform is shorter than or equal to time cut off and 
                     # long enough for FFT, does not need to be split

@@ -28,7 +28,7 @@ std = 15.4338 # Only used when pickle_stats=False
 #std = 13.9869
 spectrogram_autoencoder = True
 part_time = 1433600
-overlap_factor = 20
+overlap_factor = 0.05
 extra_factor = 0.999
 fade_shape = 'logarithmic'
 save_part_wav = False
@@ -65,7 +65,7 @@ if(pickle_stats):
 
 # Get files to declip
 funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, max_n_fft=max(n_fft)+2)
-dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=999, 
+dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=0.00001, 
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights

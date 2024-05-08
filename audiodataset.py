@@ -3,7 +3,7 @@ import torch
 from torch.utils.data import Dataset
 
 class AudioDataset(Dataset):
-    def __init__(self, funct, input_path, filelist_path, label_path=None, pad_short=True, short_thres=2, overlap_factor=None):
+    def __init__(self, funct, input_path, filelist_path, label_path=None, pad_short=True, short_thres=0.5, overlap_factor=0):
         self.funct = funct
         self.input_path = input_path
         self.label_path = label_path

@@ -6,6 +6,7 @@ from torch.nn.init import constant
 from torch.nn.parameter import Parameter
 import torchaudio.functional as F
 import torchaudio.transforms as T
+import time
 
 class AutoEncoder(nn.Module):
     def __init__(self, mean, std, n_ffts, hop_lengths, sample_rate, top_db=106,
@@ -382,7 +383,6 @@ class AutoEncoder(nn.Module):
         
         ffts = [torch.zeros(0).to(device)] * self.num_n_fft
         phases = [torch.zeros(0).to(device)] * self.num_n_fft
-       
         for i in range(self.num_n_fft):
             # Convert input to complex spectrogram
             complex_spec = T.Spectrogram(n_fft=self.n_ffts[i],
@@ -405,7 +405,6 @@ class AutoEncoder(nn.Module):
 
             # Standardize magnitude
             ffts[i] = (ffts[i]-self.mean)/self.std
-        
         # If using multiple FFT resolutions, merge them    
         if(self.num_n_fft > 1):
             num_batch = ffts[0].size(0)
