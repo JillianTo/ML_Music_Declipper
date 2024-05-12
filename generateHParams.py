@@ -22,11 +22,11 @@ hparams = {
             "checkpoint_path": "/mnt/PC801/declip/results/",
             "augmentation_labels": ["--01--","--10--","--11--","--20--"],
             #"max_time": 655360,
-            "max_time": 614400,
-            "test_max_time": 2048000,
+            "max_time": 1351680,
+            "test_max_time": 3973120,
             "short_threshold": 0.5,
-            "overlap_factor": 0.25,
-            "num_workers": 4,
+            "overlap_factor": 0.1,
+            "num_workers": 8,
             "pin_memory": False,
             "prefetch_factor": 1,
             "spectrogram_autoencoder": True,
@@ -42,13 +42,10 @@ hparams = {
             #"n_ffts": [510, 2046, 8190],
             "preload_scaler_path": None,
             #"preload_scaler_path": "/mnt/PC801/declip/results/05-07/scaler01.pth",
-            "n_ffts": [8190],
+            "n_fft": 8190,
             #"hop_lengths": [64, 256, 1024],
-            "hop_lengths": [256],
-            "stats_n_fft": 8192,
-            "stats_hop_length": 4096,
+            "hop_length": 512,
             "top_db": 106,
-            "run_small_test": False,
             "eps": 0.00000001,
             "scheduler_state": 0,
             "scheduler_factors": [1/3, 0.1, 0.1, 0.1],
@@ -58,9 +55,8 @@ hparams = {
             "test_first": False,
             "autoclip": True,
             "multigpu": True, 
-            "cuda_device": 0, # Choose which single GPU to use 
+            "cuda_device": 1, # Choose which single GPU to use when not using multi-GPU 
             "use_amp": True,
-            "accum_iter": 4,
     }
 
 

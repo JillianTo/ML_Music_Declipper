@@ -11,7 +11,7 @@ import torchaudio.transforms as T
 class Functional():
 
     def __init__(self, sample_rate=None, max_time=None, device=None, 
-                 n_fft=None, hop_length=None, top_db=None, max_n_fft=None, 
+                 n_fft=None, hop_length=None, top_db=None, 
                  augmentation_lbls=None):
         self.sample_rate = sample_rate
         self.max_time = max_time
@@ -19,7 +19,6 @@ class Functional():
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.top_db = top_db
-        self.max_n_fft = max_n_fft
         self.augmentation_lbls = augmentation_lbls
 
     def mean(self, tensor):
@@ -134,7 +133,7 @@ class Functional():
                             filelist.append([filename, time-self.max_time])
                     # Waveform is shorter than or equal to time cut off and 
                     # long enough for FFT, does not need to be split
-                    elif (time > self.max_n_fft):
+                    elif (time > self.n_fft):
                         filelist.append([filename, -1])
                     # Waveform not long enough for FFT, skip
                     else:
@@ -167,7 +166,7 @@ class Functional():
                 if(pad_short):
                     return self.pad(tensor[:, split_start:])
                 # Return split part as-is if time is enough for FFT
-                elif(end_time > self.max_n_fft):
+                elif(end_time > self.n_fft):
                     return tensor[:, split_start:]
             # Split waveform fits in max_time, return waveform starting at 
             # time split_start with length max_time
