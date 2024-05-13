@@ -96,7 +96,7 @@ def main(rank, world_size):
             "scheduler_state": hparams["scheduler_state"],
             "scheduler_factors": hparams["scheduler_factors"],
             "scheduler_patiences": hparams["scheduler_patiences"],
-            "test_points": hparams["test_points"],
+            "save_points": hparams["save_points"],
             "overwrite_preloaded_scheduler_values": 
                 hparams["overwrite_preloaded_scheduler_values"],
             "test_first": hparams["test_first"],
@@ -137,7 +137,7 @@ def main(rank, world_size):
     factors = hparams["scheduler_factors"]
     patiences = hparams["scheduler_patiences"]
     overwrite_preload_sch = hparams["overwrite_preloaded_scheduler_values"]
-    test_points = hparams["test_points"]
+    save_points = hparams["save_points"]
     test_first = hparams["test_first"]
     autoclip = hparams["autoclip"]
     use_amp = hparams["use_amp"]
@@ -354,10 +354,7 @@ def main(rank, world_size):
     test_step = 0
 
     # After how many train batches to run small test
-    test_point = int(len(trainloader) * test_points[sch_state])
-
-    # Do not run small test when about to finish training
-    last_test_point = int(len(trainloader) * 0.96)
+    save_point = int(len(trainloader) * save_points[sch_state])
 
     # Get target waveform from fileinfo
     def getTgt(batch_size, fileinfo, funct):
@@ -464,8 +461,8 @@ def main(rank, world_size):
                 # Increment step for next Aim log
                 train_step = train_step + 1
 
-                # If training has completed for test_point number of batches
-                if(i%test_point == 0 and i < last_test_point and i > 0):
+                # If training has completed for save_point number of batches
+                if(i%save_point == 0 and i > 0):
                     # If multi-GPU is enabled, make sure you are saving from 
                     # the first device
                     if world_size == None or rank == 0:
@@ -545,8 +542,8 @@ def main(rank, world_size):
                     sch_state += 1
                     scheduler.factor = factors[sch_state]
                     scheduler.patience = patiences[sch_state]
-                    test_point = int(len(trainloader) 
-                                     * test_points[sch_state])
+                    save_point = int(len(trainloader) 
+                                     * save_points[sch_state])
 
             # Log average test loss to Aim
             run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
@@ -600,7 +597,8 @@ if __name__ == "__main__":
     test_input_path = hparams["test_input_data_path"]
     stats_path = hparams["stats_path"]
     n_fft = hparams["n_fft"]
-    hop_length = hparams["hop_length"]
+    #hop_length = hparams["hop_length"]
+    hop_length = n_fft>>1
     top_db = hparams["top_db"]
     funct = Functional(max_time=max_time, device=device, n_fft=n_fft, 
                        hop_length=hop_length, top_db=top_db)

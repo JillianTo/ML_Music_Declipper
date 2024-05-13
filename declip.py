@@ -27,7 +27,7 @@ std = 15.4338 # Only used when pickle_stats=False
 #std = 13.8257
 #std = 13.9869
 spectrogram_autoencoder = True
-part_time = 1433600
+part_time = 3686400
 overlap_factor = 0.05
 extra_factor = 0.999
 fade_shape = 'logarithmic'
@@ -36,8 +36,8 @@ test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
-n_fft = [8190]
-hop_length = [256]
+n_fft = 8190
+hop_length = 512
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -64,13 +64,13 @@ if(pickle_stats):
         sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
 
 # Get files to declip
-funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, max_n_fft=max(n_fft)+2)
+funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, n_fft=n_fft, hop_length=hop_length)
 dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=0.00001, 
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights
 if spectrogram_autoencoder:
-    model = AutoEncoder(mean=mean, std=std, n_ffts=n_fft, hop_lengths=hop_length, sample_rate=sample_rate)
+    model = AutoEncoder(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
     print("Using spectrogram autoencoder")
 else:
     model = WavAutoEncoder(device)
@@ -83,7 +83,7 @@ model.eval()
 # Combine file parts
 def crossfade(filename, path, output_path, part_time, overlap_factor, extra_factor, fade_shape='logarithmic', norm_thres=0.01):
     # Calculate time of overlap between parts
-    fade_time = int(part_time/overlap_factor)
+    fade_time = int(part_time*overlap_factor)
     # Calculate time from beginning of part to not include in overlap
     extra_time = int(fade_time*extra_factor)
     # Remove extra time from fade time
