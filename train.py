@@ -6,7 +6,7 @@ import numpy as np
 from tqdm import tqdm
 import pickle
 from autoclip.torch import QuantileClip
-import time
+import datetime
 
 from audiodataset import AudioDataset
 from autoencoder import AutoEncoder
@@ -27,25 +27,12 @@ from torch.distributed import init_process_group, destroy_process_group
 def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
-    dist.init_process_group("nccl", rank=rank, world_size=world_size)
+    dist.init_process_group("nccl", rank=rank, world_size=world_size, 
+                            timeout=datetime.timedelta(seconds=5400))
 
 # Destroy DDP process groups
 def cleanup():
     dist.destroy_process_group()
-
-# Get hyperparameters from file
-def getHparams():
-    # If no input argument, use default hyperparameter file path
-    if len(sys.argv) < 2:
-        hparams_path = "hparams.txt"    
-    else:
-        hparams_path = sys.argv[1] 
-    
-    # Load hyperparameters
-    with open(hparams_path, 'rb') as f:
-        hparams = pickle.load(f)
-
-    return hparams
 
 # Process data and run training
 def main(rank, world_size):
@@ -55,7 +42,7 @@ def main(rank, world_size):
         setup(rank, world_size)
 
     # Load hyperparameters
-    hparams = getHparams()
+    hparams = Functional.get_hparams(sys.argv)
 
     # Initialize Aim run on master process
     if world_size == None or rank == 0:
@@ -217,7 +204,7 @@ def main(rank, world_size):
         db_stats = pickle.load(f)
         mean = db_stats[0]
         std = db_stats[1]
-        print(f"Loaded stats from \"path\" with mean {mean} and std "
+        print(f"Loaded stats from \"{stats_path}\" with mean {mean} and std "
               f"{std}")
 
     print("\nInitializing model, loss function, and optimizer...")
@@ -288,10 +275,16 @@ def main(rank, world_size):
     sch_change = len(factors) - 1
 
     # Define local function for saving model, optimizer, and scheduler states
-    def saveStates(epoch):
-        # Save model and optimizer states
-        torch.save(model.state_dict(), checkpoint_path 
-                   +f"model{(epoch+1):02d}.pth")
+    def save_states(epoch):
+        # If using multi-GPU, save model module 
+        if world_size != None: 
+            torch.save(model.module.state_dict(), checkpoint_path 
+                       +f"model{(epoch+1):02d}.pth")
+        # Else, save model directly
+        else:
+            torch.save(model.state_dict(), checkpoint_path 
+                       +f"model{(epoch+1):02d}.pth")
+        # Save optimizer states
         torch.save(optimizer.state_dict(), checkpoint_path 
                    +f"optimizer{(epoch+1):02d}.pth")
         torch.save(scheduler.state_dict(), checkpoint_path 
@@ -300,7 +293,7 @@ def main(rank, world_size):
                    +f"scaler{(epoch+1):02d}.pth")
 
     # Initialize loss functions
-    fft_sizes = [256, 512, 1024]
+    fft_sizes = [512, 1024, 2048]
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                    hop_sizes=[fft_size//4 for 
                                                               fft_size in 
@@ -310,7 +303,7 @@ def main(rank, world_size):
                                                    perceptual_weighting=True, 
                                                    scale=None)
     mrstft.to(rank)
-    fft_sizes = [2048, 4096, 8192]
+    fft_sizes = [4096, 8192, 16384]
     mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                        hop_sizes=[fft_size//4 
                                                                   for fft_size 
@@ -322,7 +315,7 @@ def main(rank, world_size):
     mel_mrstft.to(rank)
 
     # Define function for calculating loss
-    def calcLoss(pred, tgt):
+    def calc_loss(pred, tgt):
         # Make sure input waveform is same length as label
         if(tgt.shape[2] != pred.shape[2]):
             print(f"{fileinfo[0][0]} mismatched size, input is " 
@@ -373,12 +366,12 @@ def main(rank, world_size):
         # Clear CUDA cache
         torch.cuda.empty_cache()
 
-        # If using multi-GPU, set epoch in training data sampler
-        if(world_size != None):
-            train_sampler.set_epoch(epoch)
-
         # Check if test should be run first
         if(not (epoch < 1 and test_first)):
+            # If using multi-GPU, set epoch in training data sampler
+            if(world_size != None):
+                train_sampler.set_epoch(epoch)
+
             # Initialize total and average training loss to zero
             tot_loss = 0
             avg_loss = 0
@@ -405,7 +398,7 @@ def main(rank, world_size):
                     uncomp_wav = uncomp_wav.to(rank)
                     
                     # Calculate loss
-                    loss = calcLoss(comp_wav, uncomp_wav)
+                    loss = calc_loss(comp_wav, uncomp_wav)
 
                 # Force stop if loss is nan
                 if(loss != loss):
@@ -467,7 +460,13 @@ def main(rank, world_size):
                     # the first device
                     if world_size == None or rank == 0:
                         # Save current model, optimizer, and scheduler states
-                        saveStates(epoch)
+                        save_states(epoch)
+
+            # Calculate average loss from both GPU if multi-GPU was used
+            if world_size != None:
+                tot_loss = torch.tensor(tot_loss, device=rank)
+                dist.all_reduce(tot_loss, dist.ReduceOp.SUM, async_op=False)
+                avg_loss = tot_loss / (len(trainloader)*world_size)
 
             # Log average training loss to Aim
             if world_size == None or rank == 0:
@@ -501,7 +500,7 @@ def main(rank, world_size):
                     uncomp_wav = uncomp_wav.to(rank)
 
                     # Calculate loss
-                    loss = calcLoss(comp_wav, uncomp_wav)
+                    loss = calc_loss(comp_wav, uncomp_wav)
 
                 # Add loss to total
                 loss_item = loss.item()
@@ -525,26 +524,30 @@ def main(rank, world_size):
         # Calculate average loss from both GPU if multi-GPU was used
         if world_size != None:
             tot_loss = torch.tensor(tot_loss, device=rank)
-            dist.barrier()
             dist.all_reduce(tot_loss, dist.ReduceOp.SUM, async_op=False)
             avg_loss = tot_loss / (len(testloader)*world_size)
 
+        # Save current learning rate from scheduler
+        prev_lr = scheduler.get_last_lr()
+
+        # Send average testing loss to scheduler
+        scheduler.step(avg_loss)
+
+        # Save current learning rate from scheduler
+        curr_lr = scheduler.get_last_lr()
+
+        # Change out scheduler parameters if necessary
+        if(curr_lr < prev_lr):
+            # Change scheduler parameters after learning rate reduction
+            if(sch_state < sch_change):
+                sch_state += 1
+                scheduler.factor = factors[sch_state]
+                scheduler.patience = patiences[sch_state]
+                save_point = int(len(trainloader) 
+                                 * save_points[sch_state])
+                print(f"Scheduler changed to state {sch_state} on rank {rank}")
+
         if world_size == None or rank == 0:
-            # Send average testing loss to scheduler
-            scheduler.step(avg_loss)
-
-            # Change out scheduler parameters if necessary
-            if(optimizer.param_groups[0]['lr'] < learning_rate):
-                # Save current learning rate
-                learning_rate = optimizer.param_groups[0]['lr']
-                # Change scheduler parameters after learning rate reduction
-                if(sch_state < sch_change):
-                    sch_state += 1
-                    scheduler.factor = factors[sch_state]
-                    scheduler.patience = patiences[sch_state]
-                    save_point = int(len(trainloader) 
-                                     * save_points[sch_state])
-
             # Log average test loss to Aim
             run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
                       context={"subset":f"test"})
@@ -556,7 +559,7 @@ def main(rank, world_size):
         else:
             # Save current model, optimizer, and scheduler states
             if world_size == None or rank == 0:
-                saveStates(epoch)
+                save_states(epoch)
 
     # If multi-GPU was used, cleanup before exiting 
     if(world_size != None):
@@ -569,7 +572,7 @@ if __name__ == "__main__":
     print("Torch version: " + torch.__version__)
    
     # Load hyperparameters
-    hparams = getHparams()
+    hparams = Functional.get_hparams(sys.argv)
 
     # Enable CUDA optimizations
     torch.backends.cudnn.benchmark = True

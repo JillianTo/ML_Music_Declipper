@@ -22,20 +22,20 @@ class AutoEncoder(nn.Module):
         self.top_db = top_db
         self.in_channels = in_channels
 
-        tanh_lims = [16.0, 8.0, 4.0, 2.0, 1.0, 1.0, 1.0]
+        #tanh_lims = [16.0, 8.0, 4.0, 2.0, 1.0, 1.0, 1.0]
 
         # Encoder layers
         self.enc1 = nn.Sequential(
             nn.Conv2d(in_channels=in_channels, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
+            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels>>1, first_out_channels),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
+            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels>>1, first_out_channels),
         )
@@ -46,13 +46,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
+            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
+            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels, first_out_channels<<1),
         )
@@ -63,13 +63,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
+            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
+            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
         )
@@ -80,13 +80,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
         )
@@ -97,13 +97,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<4, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<4, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
         )
@@ -114,13 +114,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<5, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
+            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<5, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
+            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
         )
@@ -131,13 +131,13 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<6, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
+            #nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<5, first_out_channels<<6),
             nn.Conv2d(in_channels=first_out_channels<<6, 
                       out_channels=first_out_channels<<6, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
+            #nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
             nn.Dropout(dropout),
             #nn.GroupNorm(first_out_channels<<5, first_out_channels<<6),
         )
@@ -150,7 +150,7 @@ class AutoEncoder(nn.Module):
 
         # Long-short term memory
         self.lstm = nn.LSTM(input_size=lstm_channels, 
-                            hidden_size=lstm_channels>>1, num_layers=3, 
+                            hidden_size=lstm_channels>>1, num_layers=4, 
                             batch_first=True, dropout=dropout, 
                             bidirectional=True)
 
@@ -163,19 +163,19 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=lstm_channels, 
                       out_channels=lstm_channels>>1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[lstm_idx], max_val=tanh_lims[lstm_idx]),
+            #nn.Hardtanh(min_val=-tanh_lims[lstm_idx], max_val=tanh_lims[lstm_idx]),
             #nn.GroupNorm(lstm_channels>>2, lstm_channels>>1),
         )
         self.dec6 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<6, 
                       out_channels=first_out_channels<<5, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
+            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
             #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<5, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
+            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
             #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
         )
         self.up_conv6 = nn.Sequential(
@@ -186,19 +186,19 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<4, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
+            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
             #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
         )
         self.dec5 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<4, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
             #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<4, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
             #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
         )
         self.up_conv5 = nn.Sequential(
@@ -209,19 +209,19 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
             #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
         )
         self.dec4 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
             #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
             #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
         )
         self.up_conv4 = nn.Sequential(
@@ -232,19 +232,19 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
             #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
         )
         self.dec3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
+            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
             #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
+            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
             #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
         )
         self.up_conv3 = nn.Sequential(
@@ -255,19 +255,19 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
+            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
             #nn.GroupNorm(first_out_channels, first_out_channels<<1),
         )
         self.dec2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
+            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
             #nn.GroupNorm(first_out_channels, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
+            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
             #nn.GroupNorm(first_out_channels, first_out_channels<<1),
         )
         self.up_conv2 = nn.Sequential(
@@ -278,24 +278,24 @@ class AutoEncoder(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
+            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
             #nn.GroupNorm(first_out_channels>>1, first_out_channels),
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
+            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             #nn.GroupNorm(first_out_channels>>1, first_out_channels),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
+            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             #nn.GroupNorm(first_out_channels>>1, first_out_channels),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=in_channels, kernel_size=kernel_size, 
                       stride=stride_1, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
+            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             #nn.GroupNorm(max(int(in_channels>>1), 1), in_channels),
             nn.Conv2d(in_channels=in_channels, out_channels=in_channels, 
                       kernel_size=(1,1), stride=(1,1), padding=1),
@@ -332,25 +332,18 @@ class AutoEncoder(nn.Module):
 
         # Save encoder layers for skip connections
         e1 = self.enc1(x)
-        #print(torch.max(e1))
-        #print(torch.min(e1))
         e2 = self.enc2(e1)
-        #print(torch.max(e2))
-        #print(torch.min(e2))
         e3 = self.enc3(e2)
-        #print(torch.max(e3))
-        #print(torch.min(e3))
         #x = self.enc4(e3)
         e4 = self.enc4(e3)
-        #print(torch.max(e4))
-        #print(torch.min(e4))
         x = self.enc5(e4)
-        #print(torch.max(x))
-        #print(torch.min(x))
         #e5 = self.enc5(e4)
         #x = self.enc6(e5)
         #e6 = self.enc6(e5)
         #x = self.enc7(e6)
+
+        # Apply tanh to last encoder layer
+        x = torch.tanh(x)
 
         # Flatten encoder output and rearrange to use with LSTM
         freq_dim = x.size(2)

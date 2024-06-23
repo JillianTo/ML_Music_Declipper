@@ -2,6 +2,9 @@ import os
 import sys
 import math
 import pickle
+import re
+from collections import OrderedDict
+
 from audiodataset import AudioDataset
 from autoencoder import AutoEncoder
 from functional import Functional
@@ -14,30 +17,28 @@ import torchaudio.transforms as T
 
 # Parameters
 path = "/mnt/PC801/declip/"
-#path = "/mnt/MP600/data/comp/testDeclip/"
 weights_path = "/mnt/PC801/declip/results/model01.pth"
 #weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
 output_path = "/mnt/PC801/declip/new/"
-sample_rate = 44100
-pickle_stats = True
-mean = -4.3546 # Only used when pickle_stats=False
-std = 15.4338 # Only used when pickle_stats=False
-#mean = -0.4622
-#mean = -3.9821
-#std = 13.8257
-#std = 13.9869
-spectrogram_autoencoder = True
-part_time = 3686400
+part_time = 1536000
+#part_time = 1024000
+#part_time = 3072000
 overlap_factor = 0.05
 extra_factor = 0.999
 fade_shape = 'logarithmic'
-save_part_wav = False
+save_part_wav = True
 test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
-n_fft = 8190
-hop_length = 512
+
+# Model hyperparameters
+hparams = Functional.get_hparams(sys.argv)
+sample_rate = hparams["expected_sample_rate"]
+spectrogram_autoencoder = hparams["spectrogram_autoencoder"]
+n_fft = hparams["n_fft"]
+hop_length = hparams["hop_length"]
+use_amp = hparams["use_amp"]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -47,21 +48,20 @@ device = (
         if torch.backends.mps.is_available()
         else "cpu"
 )
-#device = "cpu"
+device = "cpu"
 print(f"Using {device} device")
 
 # Get mean and std from file
-if(pickle_stats):
-    stats_path = "db_stats.txt"
-    if(os.path.isfile(stats_path)):
-        with open(stats_path, 'rb') as f:
-            #db_stats = torch.load(f, map_location=torch.device(device))
-            db_stats = pickle.load(f)
-            mean = db_stats[0]
-            std = db_stats[1]
-            print(f"Loaded mean {mean:.4f} and std {std:.4f} from \'{stats_path}\'")
-    else:
-        sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
+stats_path = "db_stats.txt"
+if(os.path.isfile(stats_path)):
+    with open(stats_path, 'rb') as f:
+        #db_stats = torch.load(f, map_location=torch.device(device))
+        db_stats = pickle.load(f)
+        mean = db_stats[0]
+        std = db_stats[1]
+        print(f"Loaded mean {mean:.4f} and std {std:.4f} from \'{stats_path}\'")
+else:
+    sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
 
 # Get files to declip
 funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, n_fft=n_fft, hop_length=hop_length)
@@ -72,12 +72,18 @@ dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=0.00001,
 if spectrogram_autoencoder:
     model = AutoEncoder(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
     print("Using spectrogram autoencoder")
-else:
-    model = WavAutoEncoder(device)
-    print("Using waveform autoencoder")
+
 model.to(device)
-model.load_state_dict(torch.load(weights_path, 
-                                 map_location=torch.device(device)))
+
+#state = torch.load(weights_path, map_location=device)
+#new_state = OrderedDict()
+#for k, v in state.items():
+#    # Remove '.module'
+#    name = k[7:]
+#    new_state[name] = v
+#model.load_state_dict(new_state)    
+
+model.load_state_dict(torch.load(weights_path, map_location=device))
 model.eval()
 
 # Combine file parts
@@ -194,6 +200,14 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
 
     return tensor
 
+if device != "cpu":
+    autocast_device = "cuda"
+    autocast_dtype = torch.float16
+# Doesn't work with MPS
+else:
+    autocast_device = device
+    autocast_dtype = torch.bfloat16
+
 with torch.no_grad():
     curr_filename = None
     part_num = 1
@@ -222,7 +236,9 @@ with torch.no_grad():
             tensor = tensor.to(device)
 
             tensor = torch.unsqueeze(tensor, 0)
-            tensor = model(tensor)
+            with torch.autocast(device_type=autocast_device, enabled=use_amp, 
+                                dtype=autocast_dtype):
+                tensor = model(tensor)
             tensor = torch.squeeze(tensor)
 
             # Save output to files

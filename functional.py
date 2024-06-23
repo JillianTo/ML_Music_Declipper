@@ -44,6 +44,20 @@ class Functional():
         complex_spec = complex_spec.to(self.device)
         return  complex_spec(tensor)
 
+    # Get hyperparameters from file
+    def get_hparams(args):
+        # If no input argument, use default hyperparameter file path
+        if len(args) < 2:
+            hparams_path = "hparams.txt"    
+        else:
+            hparams_path = args[1] 
+        
+        # Load hyperparameters
+        with open(hparams_path, 'rb') as f:
+            hparams = pickle.load(f)
+
+        return hparams
+
     def db_stats(self, input_path):
         mean = 0
         std = 0
@@ -66,6 +80,9 @@ class Functional():
 
                 # Calculate stats
                 curr_std, curr_mean = torch.std_mean(x) 
+
+                # Clear tensor from memory
+                del x
                 
                 # Add stats to totals
                 mean = mean + curr_mean
@@ -80,7 +97,6 @@ class Functional():
         
         # Return stats
         return mean, std
-        
 
     def upsample(self, tensor, time):
         upsampler = nn.Upsample(time)
