@@ -91,6 +91,8 @@ def main(rank, world_size):
             "multigpu": hparams["multigpu"], 
             "cuda_device": hparams["cuda_device"], 
             "use_amp": hparams["use_amp"],
+            "use_tf32": hparams["use_tf32"],
+            "grad_accum": hparams["grad_accum"],
         }
 
     # Save individual hyperparameters to variables for easier access
@@ -128,6 +130,7 @@ def main(rank, world_size):
     test_first = hparams["test_first"]
     autoclip = hparams["autoclip"]
     use_amp = hparams["use_amp"]
+    grad_accum = hparams["grad_accum"]
 
     # Load wavs into training data
     print("\nLoading data...")
@@ -213,10 +216,9 @@ def main(rank, world_size):
     if hparams["spectrogram_autoencoder"]:
         model = AutoEncoder(mean=mean, std=std, n_fft=n_fft, 
                             hop_length=hop_length, 
-                            sample_rate=sample_rate)
+                            sample_rate=sample_rate).to(rank)
         print("Using spectrogram autoencoder")
     #model = torch.compile(model, mode='default')
-    model = model.to(rank)
 
     # Load model weights from path if given
     if preload_weights_path != None:
@@ -228,6 +230,7 @@ def main(rank, world_size):
     if(world_size != None):
         model = DDP(model, device_ids=[rank], output_device=rank,
                     find_unused_parameters=True)
+        print("Using DDP")
 
     # Initialize optimizer
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
@@ -293,7 +296,7 @@ def main(rank, world_size):
                    +f"scaler{(epoch+1):02d}.pth")
 
     # Initialize loss functions
-    fft_sizes = [512, 1024, 2048]
+    fft_sizes = [2048, 4096, 8192]
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                    hop_sizes=[fft_size//4 for 
                                                               fft_size in 
@@ -303,7 +306,7 @@ def main(rank, world_size):
                                                    perceptual_weighting=True, 
                                                    scale=None)
     mrstft.to(rank)
-    fft_sizes = [4096, 8192, 16384]
+    fft_sizes = [2048, 4096, 8192]
     mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
                                                        hop_sizes=[fft_size//4 
                                                                   for fft_size 
@@ -324,7 +327,7 @@ def main(rank, world_size):
             pred = funct.upsample(pred, tgt.shape[2])
 
         # Scale estimate to label mean
-        pred = pred*(funct.mean(abs(tgt))/funct.mean(abs(pred)))
+        #pred = pred*(funct.mean(abs(tgt))/funct.mean(abs(pred)))
 
         # Calculate individual channel loss
         lr_loss = mrstft(pred, tgt)
@@ -359,6 +362,16 @@ def main(rank, world_size):
                                     is_input=False)  
             tgt = torch.unsqueeze(tgt, dim=0)
         return tgt
+    
+    # Define autocast parameters depending on device
+    if rank != "cpu":
+        autocast_device = "cuda"
+        autocast_dtype = torch.float16
+    else:
+        if rank == "mps":
+            print("WARNING: Autocast functionality not tested for MPS")
+        autocast_device = rank
+        autocast_dtype = torch.bfloat16
 
     # Training Loop
     print("\nStarting training loop...")
@@ -388,8 +401,8 @@ def main(rank, world_size):
 
 
                 # Forward pass
-                with torch.autocast(device_type="cuda", enabled=use_amp, 
-                                    dtype=torch.float16):
+                with torch.autocast(device_type=autocast_device, 
+                                    enabled=use_amp, dtype=autocast_dtype):
                     comp_wav = comp_wav.to(rank)
                     comp_wav = model(comp_wav)
 
@@ -398,7 +411,7 @@ def main(rank, world_size):
                     uncomp_wav = uncomp_wav.to(rank)
                     
                     # Calculate loss
-                    loss = calc_loss(comp_wav, uncomp_wav)
+                    loss = calc_loss(comp_wav, uncomp_wav) / grad_accum
 
                 # Force stop if loss is nan
                 if(loss != loss):
@@ -408,35 +421,37 @@ def main(rank, world_size):
                 # Backward pass: compute the gradient of the loss with respect
                 # to model parameters
                 scaler.scale(loss).backward()
-                #print(funct.mean(abs(model.enc1[3].weight.grad)))
-                #print(funct.mean(abs(model.enc2[4].weight.grad)))
-                #print(funct.mean(abs(model.enc3[4].weight.grad)))
-                #print(funct.mean(abs(model.enc4[4].weight.grad)))
-                #print(funct.mean(abs(model.enc5[4].weight.grad)))
+                #print(funct.mean(abs(model.enc1[2].weight.grad)))
+                #print(funct.mean(abs(model.enc2[3].weight.grad)))
+                #print(funct.mean(abs(model.enc3[3].weight.grad)))
+                #print(funct.mean(abs(model.enc4[3].weight.grad)))
+                #print(funct.mean(abs(model.enc5[3].weight.grad)))
                 #print(funct.mean(abs(model.enc6[4].weight.grad)))
                 #print(funct.mean(abs(model.enc7[4].weight.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l0.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l1.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l2.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l3.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l4.grad)))
-                #print(funct.mean(abs(model.lstm.weight_ih_l5.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l0.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l1.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l2.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l3.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l4.grad)))
+                #print(funct.mean(abs(model.lstm[1].weight_ih_l5.grad)))
                 
-                # Update the model's parameters using the optimizer's step 
-                # method
-                #optimizer.step()
-                scaler.unscale_(optimizer)
-                scaler.step(optimizer)
-                scaler.update()
+                if (i + 1) % grad_accum == 0:
+                    # Unscale to allow for gradient clipping
+                    scaler.unscale_(optimizer)
 
-                # Zero the gradients of all optimized variables. This is to 
-                # ensure that we don't accumulate gradients from previous 
-                # batches, as gradients are accumulated by default in 
-                # PyTorch
-                optimizer.zero_grad(set_to_none=True)
+                    # Update the model's parameters using the optimizer's step 
+                    # method
+                    scaler.step(optimizer)
+                    scaler.update()
+
+                    # Zero the gradients of all optimized variables. This is to 
+                    # ensure that we don't accumulate gradients from previous 
+                    # batches, as gradients are accumulated by default in 
+                    # PyTorch
+                    optimizer.zero_grad(set_to_none=True)
 
                 # Add loss to total
-                loss_item = loss.item()
+                loss_item = loss.item() * grad_accum
                 tot_loss += loss_item
 
                 # Calculate average loss so far
@@ -574,12 +589,6 @@ if __name__ == "__main__":
     # Load hyperparameters
     hparams = Functional.get_hparams(sys.argv)
 
-    # Enable CUDA optimizations
-    torch.backends.cudnn.benchmark = True
-    torch.backends.cuda.matmul.allow_tf32 = True
-    torch.backends.cudnn.allow_tf32 = True
-
-    # Get CPU, GPU, or MPS device for training
     cuda_device = f"cuda:{hparams['cuda_device']}"
     device = (
             cuda_device
@@ -590,7 +599,7 @@ if __name__ == "__main__":
     )
     print(f"Using {device} device")
    
-    # Initialize variables for creating stats and filelists if needed
+    # Initialize variables for relevant setup parameters
     train_filelist_path = hparams["train_filelist_path"]
     test_filelist_path = hparams["test_filelist_path"]
     max_time = hparams["max_time"]
@@ -603,9 +612,20 @@ if __name__ == "__main__":
     #hop_length = hparams["hop_length"]
     hop_length = n_fft>>1
     top_db = hparams["top_db"]
+    use_tf32 = hparams["use_tf32"]
+    
+    # Initialize instance of functional with relevant parameters
     funct = Functional(max_time=max_time, device=device, n_fft=n_fft, 
                        hop_length=hop_length, top_db=top_db)
 
+    # Enable CUDA optimizations
+    if device == cuda_device:
+        torch.backends.cudnn.benchmark = True
+        if use_tf32:
+            torch.backends.cuda.matmul.allow_tf32 = True
+            torch.backends.cudnn.allow_tf32 = True
+
+    # Get CPU, GPU, or MPS device for training
     # Generate training data filelist if it has not been
     if(not os.path.isfile(train_filelist_path)):
         funct.get_filelist(input_path, short_thres, train_filelist_path, 

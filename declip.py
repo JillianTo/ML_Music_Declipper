@@ -19,14 +19,13 @@ import torchaudio.transforms as T
 path = "/mnt/PC801/declip/"
 weights_path = "/mnt/PC801/declip/results/model01.pth"
 #weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
+stats_path = "db_stats.txt"
 output_path = "/mnt/PC801/declip/new/"
-part_time = 1536000
-#part_time = 1024000
-#part_time = 3072000
+part_time = 2662400
 overlap_factor = 0.05
 extra_factor = 0.999
 fade_shape = 'logarithmic'
-save_part_wav = True
+save_part_wav = False
 test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
@@ -52,7 +51,6 @@ device = "cpu"
 print(f"Using {device} device")
 
 # Get mean and std from file
-stats_path = "db_stats.txt"
 if(os.path.isfile(stats_path)):
     with open(stats_path, 'rb') as f:
         #db_stats = torch.load(f, map_location=torch.device(device))

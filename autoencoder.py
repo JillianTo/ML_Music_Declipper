@@ -10,8 +10,8 @@ import time
 
 class AutoEncoder(nn.Module):
     def __init__(self, mean, std, n_fft, hop_length, sample_rate, top_db=106,
-                 in_channels=2, first_out_channels=32, kernel_size=(3,3), 
-                 stride_1=(1,1), stride_2=(2,2), dropout=0.4):
+                 in_channels=2, first_out_channels=64, kernel_size=(3,3), 
+                 stride=(1,1), dropout=0.4, norm_groups=32):
         super(AutoEncoder, self).__init__(),
 
         self.mean = mean
@@ -22,281 +22,177 @@ class AutoEncoder(nn.Module):
         self.top_db = top_db
         self.in_channels = in_channels
 
-        #tanh_lims = [16.0, 8.0, 4.0, 2.0, 1.0, 1.0, 1.0]
-
         # Encoder layers
         self.enc1 = nn.Sequential(
             nn.Conv2d(in_channels=in_channels, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels>>1, first_out_channels),
+                      kernel_size=kernel_size, stride=stride, padding=1),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels>>1, first_out_channels),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels, 
-                      out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels, first_out_channels<<1),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels, first_out_channels<<1),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
-                      out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc4 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
-                      out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc5 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<3, 
-                      out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<4),
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc6 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<4, 
-                      out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<5, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<5),
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<5, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.enc7 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<5, 
-                      out_channels=first_out_channels<<5, 
-                      kernel_size=kernel_size, stride=stride_2, padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<6, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<5, first_out_channels<<6),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<6),
             nn.Conv2d(in_channels=first_out_channels<<6, 
                       out_channels=first_out_channels<<6, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[6], max_val=tanh_lims[6]),
-            nn.Dropout(dropout),
-            #nn.GroupNorm(first_out_channels<<5, first_out_channels<<6),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
 
-        # Set HardTanh limit to same as last used encoder layer
-        lstm_idx = 5-1
+        # Pool layer
+        self.pool = nn.MaxPool2d((2,2), stride=2)
+
+        # Tanh layer
+        self.tanh = nn.Tanh()
+
+        # Last used encoder layer
+        lstm_idx = 4
 
         # Set LSTM channels to output channels of last used encoder layer 
-        lstm_channels = first_out_channels<<lstm_idx
+        lstm_channels = first_out_channels<<(lstm_idx-1)
 
         # Long-short term memory
-        self.lstm = nn.LSTM(input_size=lstm_channels, 
-                            hidden_size=lstm_channels>>1, num_layers=4, 
-                            batch_first=True, dropout=dropout, 
-                            bidirectional=True)
+        self.lstm = nn.Sequential(
+            nn.LayerNorm(lstm_channels),
+            nn.LSTM(input_size=lstm_channels, 
+                    hidden_size=lstm_channels>>1, num_layers=3, 
+                    batch_first=True, dropout=dropout, 
+                    bidirectional=True)
+        )
 
         # Decoder layers
-        self.up_conv_lstm = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=lstm_channels, 
-                               out_channels=lstm_channels,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
-            nn.Conv2d(in_channels=lstm_channels, 
-                      out_channels=lstm_channels>>1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[lstm_idx], max_val=tanh_lims[lstm_idx]),
-            #nn.GroupNorm(lstm_channels>>2, lstm_channels>>1),
-        )
         self.dec6 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<6, 
                       out_channels=first_out_channels<<5, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
-            #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<5),
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<5, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
-            #nn.GroupNorm(first_out_channels<<4, first_out_channels<<5),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.up_conv6 = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=first_out_channels<<5, 
-                               out_channels=first_out_channels<<5,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
-            nn.Conv2d(in_channels=first_out_channels<<5, 
-                      out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
-            #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
+            nn.Upsample(scale_factor=(2,2)),
+            nn.Conv2d(in_channels=first_out_channels<<6, 
+                      out_channels=first_out_channels<<5, 
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.dec5 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<5, 
                       out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
-            #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<4),
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<4, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
-            #nn.GroupNorm(first_out_channels<<3, first_out_channels<<4),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.up_conv5 = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=first_out_channels<<4, 
-                               out_channels=first_out_channels<<4,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
+            nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
-            #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.dec4 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
-            #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
-            #nn.GroupNorm(first_out_channels<<2, first_out_channels<<3),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.up_conv4 = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=first_out_channels<<3, 
-                               out_channels=first_out_channels<<3,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
+            nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
-            #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.dec3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
-            #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
-            #nn.GroupNorm(first_out_channels<<1, first_out_channels<<2),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.up_conv3 = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=first_out_channels<<2, 
-                               out_channels=first_out_channels<<2,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
+            nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
-            #nn.GroupNorm(first_out_channels, first_out_channels<<1),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.dec2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
-            #nn.GroupNorm(first_out_channels, first_out_channels<<1),
+                      kernel_size=kernel_size, stride=stride, padding=1),
+            nn.GroupNorm(norm_groups, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
-            #nn.GroupNorm(first_out_channels, first_out_channels<<1),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.up_conv2 = nn.Sequential(
-            nn.ConvTranspose2d(in_channels=first_out_channels<<1, 
-                               out_channels=first_out_channels<<1,
-                               kernel_size=kernel_size, stride=stride_2, 
-                               padding=1),
+            nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
-            #nn.GroupNorm(first_out_channels>>1, first_out_channels),
+                      kernel_size=kernel_size, stride=stride, padding=1),
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
-            #nn.GroupNorm(first_out_channels>>1, first_out_channels),
+                      kernel_size=kernel_size, stride=stride, padding=1),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
-            #nn.GroupNorm(first_out_channels>>1, first_out_channels),
+                      kernel_size=kernel_size, stride=stride, padding=1),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=in_channels, kernel_size=kernel_size, 
-                      stride=stride_1, padding=1),
-            #nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
-            #nn.GroupNorm(max(int(in_channels>>1), 1), in_channels),
+                      stride=stride, padding=1),
             nn.Conv2d(in_channels=in_channels, out_channels=in_channels, 
                       kernel_size=(1,1), stride=(1,1), padding=1),
         )
@@ -331,29 +227,24 @@ class AutoEncoder(nn.Module):
         x = (x-self.mean)/self.std
 
         # Save encoder layers for skip connections
-        e1 = self.enc1(x)
-        e2 = self.enc2(e1)
-        e3 = self.enc3(e2)
-        #x = self.enc4(e3)
-        e4 = self.enc4(e3)
-        x = self.enc5(e4)
-        #e5 = self.enc5(e4)
-        #x = self.enc6(e5)
-        #e6 = self.enc6(e5)
-        #x = self.enc7(e6)
-
-        # Apply tanh to last encoder layer
-        x = torch.tanh(x)
+        e1 = self.enc1(self.pool(x))
+        e2 = self.tanh(self.enc2(self.pool(e1)))
+        e3 = self.tanh(self.enc3(self.pool(e2)))
+        e4 = self.tanh(self.enc4(self.pool(e3)))
+        #e5 = self.enc5(self.pool(e4))
+        #x = self.tanh(e4)
+        x = e4
 
         # Flatten encoder output and rearrange to use with LSTM
+        ch_dim = x.size(1)
         freq_dim = x.size(2)
         time_dim = x.size(3)
-        x = x.reshape(x.size(0), freq_dim*time_dim, x.size(1))
+        x = x.reshape(x.size(0), freq_dim*time_dim, ch_dim)
         x, _ = self.lstm(x)
-        x = x.reshape(x.size(0), x.size(2), freq_dim, time_dim)
+        # Rearrange input to original shape
+        x = x.reshape(x.size(0), ch_dim, freq_dim, time_dim)
 
         # Decoder
-        x = self.up_conv_lstm(x)
         #dec_upsample = nn.Upsample(size=[e6.shape[2], e6.shape[3]])
         #dec_upsample = dec_upsample.to(device)
         #x = dec_upsample(x)
@@ -361,6 +252,8 @@ class AutoEncoder(nn.Module):
         #x = self.up_conv6(self.dec6(x))
         #dec_upsample = nn.Upsample(size=[e5.shape[2], e5.shape[3]])
         #dec_upsample = dec_upsample.to(device)
+        #print(e5.shape)
+        #print(x.shape)
         #x = dec_upsample(x)
         #x = torch.cat((x, e5), dim=1)
         #x = self.up_conv5(self.dec5(x))
@@ -370,21 +263,21 @@ class AutoEncoder(nn.Module):
         #print(x.shape)
         x = dec_upsample(x)
         x = torch.cat((x, e4), dim=1)
-        x = self.up_conv4(self.dec4(x))
+        x = self.up_conv4(self.tanh(self.dec4(x)))
         dec_upsample = nn.Upsample(size=[e3.shape[2], e3.shape[3]])
         dec_upsample = dec_upsample.to(device)
         #print(e3.shape)
         #print(x.shape)
         x = dec_upsample(x)
         x = torch.cat((x, e3), dim=1)
-        x = self.up_conv3(self.dec3(x))
+        x = self.up_conv3(self.tanh(self.dec3(x)))
         dec_upsample = nn.Upsample(size=[e2.shape[2], e2.shape[3]])
         dec_upsample = dec_upsample.to(device)
         #print(e2.shape)
         #print(x.shape)
         x = dec_upsample(x)
         x = torch.cat((x, e2), dim=1)
-        x = self.up_conv2(self.dec2(x))
+        x = self.up_conv2(self.tanh(self.dec2(x)))
         dec_upsample = nn.Upsample(size=[e1.shape[2], e1.shape[3]])
         dec_upsample = dec_upsample.to(device)
         #print(e1.shape)
