@@ -9,8 +9,8 @@ from autoclip.torch import QuantileClip
 import datetime
 
 from audiodataset import AudioDataset
-from autoencoder import AutoEncoder
 from functional import Functional
+from model import LSTMModel, TransformerModel
 
 import torch
 import torch.distributed as dist
@@ -71,7 +71,7 @@ def main(rank, world_size):
             "num_workers": hparams["num_workers"],
             "pin_memory": hparams["pin_memory"],
             "prefetch_factor": hparams["prefetch_factor"],
-            "spectrogram_autoencoder": hparams["spectrogram_autoencoder"],
+            "transformer": hparams["transformer"],
             "preload_weights_path": hparams["preload_weights_path"],
             "preload_optimizer_path": hparams["preload_optimizer_path"],
             "preload_scheduler_path": hparams["preload_scheduler_path"],
@@ -136,34 +136,36 @@ def main(rank, world_size):
     print("\nLoading data...")
 
     # Add inputs and labels to training dataset
-    funct = Functional(sample_rate=sample_rate, max_time=max_time, device=rank, 
-                       n_fft=n_fft, hop_length=hop_length, 
-                       top_db=top_db, augmentation_lbls=augmentation_lbls)
+    funct = Functional(max_time=max_time, device=rank, n_fft=n_fft, 
+                       hop_length=hop_length, 
+                       augmentation_lbls=augmentation_lbls)
     if(batch_size > 1):
         train_data = AudioDataset(funct, input_path, train_filelist_path, 
+                                  sample_rate=sample_rate,
                                   label_path=label_path, 
                                   short_thres=short_thres,
                                   overlap_factor=overlap_factor)
     else:
         train_data = AudioDataset(funct, input_path, train_filelist_path, 
-                                  pad_short=False, short_thres=short_thres,
+                                  sample_rate=sample_rate, pad_short=False, 
+                                  short_thres=short_thres,
                                   overlap_factor=overlap_factor)
     print(f"Added {len(train_data)} file pairs to training data")
 
     # Add inputs and labels to test dataset
-    test_funct = Functional(sample_rate=sample_rate, max_time=test_max_time, 
-                            device=rank, n_fft=n_fft, 
-                            hop_length=hop_length, top_db=top_db,
+    test_funct = Functional(max_time=test_max_time, device=rank, n_fft=n_fft, 
+                            hop_length=hop_length, 
                             augmentation_lbls=augmentation_lbls)
     if(test_batch_size > 1):
         test_data = AudioDataset(test_funct, test_input_path, 
-                                 test_filelist_path, label_path=label_path, 
+                                 test_filelist_path, sample_rate=sample_rate,
+                                 label_path=label_path, 
                                  short_thres=short_thres, 
                                  overlap_factor=overlap_factor)
     else:
         test_data = AudioDataset(test_funct, test_input_path, 
-                                 test_filelist_path, pad_short=False, 
-                                 short_thres=short_thres, 
+                                 test_filelist_path, sample_rate=sample_rate,
+                                 pad_short=False, short_thres=short_thres, 
                                  overlap_factor=overlap_factor)
     print(f"Added {len(test_data)} file pairs to test data")
 
@@ -213,11 +215,16 @@ def main(rank, world_size):
     print("\nInitializing model, loss function, and optimizer...")
 
     # Initialize model
-    if hparams["spectrogram_autoencoder"]:
-        model = AutoEncoder(mean=mean, std=std, n_fft=n_fft, 
-                            hop_length=hop_length, 
-                            sample_rate=sample_rate).to(rank)
-        print("Using spectrogram autoencoder")
+    if hparams["transformer"]:
+        model = TransformerModel(mean=mean, std=std, n_fft=n_fft, 
+                                 hop_length=hop_length, 
+                                 sample_rate=sample_rate).to(rank)
+        print("Using Transformer Encoder")
+    else:
+        model = RNNModel(mean=mean, std=std, n_fft=n_fft, 
+                         hop_length=hop_length, 
+                         sample_rate=sample_rate).to(rank)
+        print("Using LSTM")
     #model = torch.compile(model, mode='default')
 
     # Load model weights from path if given
@@ -228,8 +235,8 @@ def main(rank, world_size):
 
     # If using multi-GPU, set up DDP
     if(world_size != None):
-        model = DDP(model, device_ids=[rank], output_device=rank,
-                    find_unused_parameters=True)
+        model = DDP(model, device_ids=[rank], output_device=rank)
+                    #find_unused_parameters=True)
         print("Using DDP")
 
     # Initialize optimizer
@@ -269,7 +276,11 @@ def main(rank, world_size):
               f"{scheduler.factor} and patience {scheduler.patience}")
 
     # Initialize gradient scaler
-    scaler = torch.cuda.amp.GradScaler(enabled=use_amp) 
+    if rank == 'cpu':
+        scaler_device = rank
+    else:
+        scaler_device = 'cuda' 
+    scaler = torch.amp.GradScaler(scaler_device, enabled=use_amp) 
     if preload_scaler_path != None:
         scaler.load_state_dict(torch.load(preload_scaler_path))
         print(f"Preloaded scaler from \"{preload_scaler_path}\"")
@@ -296,9 +307,9 @@ def main(rank, world_size):
                    +f"scaler{(epoch+1):02d}.pth")
 
     # Initialize loss functions
-    fft_sizes = [2048, 4096, 8192]
+    fft_sizes = [2048, 4096]
     mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                   hop_sizes=[fft_size//4 for 
+                                                   hop_sizes=[fft_size//8 for 
                                                               fft_size in 
                                                               fft_sizes], 
                                                    win_lengths=fft_sizes,
@@ -306,9 +317,9 @@ def main(rank, world_size):
                                                    perceptual_weighting=True, 
                                                    scale=None)
     mrstft.to(rank)
-    fft_sizes = [2048, 4096, 8192]
+    fft_sizes = [2048, 4096]
     mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                       hop_sizes=[fft_size//4 
+                                                       hop_sizes=[fft_size//8 
                                                                   for fft_size 
                                                                   in 
                                                                   fft_sizes], 
@@ -324,7 +335,7 @@ def main(rank, world_size):
             print(f"{fileinfo[0][0]} mismatched size, input is " 
                   f"{pred.shape[2]} and label is "
                   f"{tgt.shape[2]}")
-            pred = funct.upsample(pred, tgt.shape[2])
+            pred = Functional.upsample(pred, tgt.shape[2])
 
         # Scale estimate to label mean
         #pred = pred*(funct.mean(abs(tgt))/funct.mean(abs(pred)))
@@ -333,8 +344,8 @@ def main(rank, world_size):
         lr_loss = mrstft(pred, tgt)
 
         # Sum waveforms to one channel
-        pred = funct.sum(pred)
-        tgt = funct.sum(tgt)
+        pred = Functional.sum(pred)
+        tgt = Functional.sum(tgt)
 
         # Calculate sum loss
         sum_loss = mel_mrstft(pred, tgt)
@@ -345,12 +356,13 @@ def main(rank, world_size):
         # Return loss
         return loss
 
-    # Steps needed for data plotting in Aim
-    train_step = 0
-    test_step = 0
-
-    # After how many train batches to run small test
-    save_point = int(len(trainloader) * save_points[sch_state])
+    # Define function for calculating how many train batches until checkpoint
+    def calc_save_pt():
+        save_point = int(len(trainloader) * save_points[sch_state])
+        if save_point < 1:
+            return 999
+        else:
+            return save_point
 
     # Get target waveform from fileinfo
     def getTgt(batch_size, fileinfo, funct):
@@ -358,11 +370,18 @@ def main(rank, world_size):
             tgt = fileinfo
         else:
             fileinfo = (fileinfo[0][0], fileinfo[1].item())
-            tgt = funct.process_wav(label_path, fileinfo, batch_size != 1, 
-                                    is_input=False)  
+            tgt = funct.process_wav(label_path, fileinfo, sample_rate, 
+                                    batch_size != 1, is_input=False)  
             tgt = torch.unsqueeze(tgt, dim=0)
         return tgt
     
+    # Steps needed for data plotting in Aim
+    train_step = 0
+    test_step = 0
+
+    # Determine when to checkpoint
+    save_point = calc_save_pt()
+
     # Define autocast parameters depending on device
     if rank != "cpu":
         autocast_device = "cuda"
@@ -558,8 +577,7 @@ def main(rank, world_size):
                 sch_state += 1
                 scheduler.factor = factors[sch_state]
                 scheduler.patience = patiences[sch_state]
-                save_point = int(len(trainloader) 
-                                 * save_points[sch_state])
+                save_point = calc_save_pt()
                 print(f"Scheduler changed to state {sch_state} on rank {rank}")
 
         if world_size == None or rank == 0:
@@ -609,18 +627,18 @@ if __name__ == "__main__":
     test_input_path = hparams["test_input_data_path"]
     stats_path = hparams["stats_path"]
     n_fft = hparams["n_fft"]
-    #hop_length = hparams["hop_length"]
-    hop_length = n_fft>>1
+    hop_length = hparams["stats_hop_length"]
     top_db = hparams["top_db"]
     use_tf32 = hparams["use_tf32"]
-    
+   
     # Initialize instance of functional with relevant parameters
     funct = Functional(max_time=max_time, device=device, n_fft=n_fft, 
-                       hop_length=hop_length, top_db=top_db)
+                       hop_length=hop_length) 
 
     # Enable CUDA optimizations
     if device == cuda_device:
-        torch.backends.cudnn.benchmark = True
+        #torch.backends.cudnn.benchmark = True
+        torch.backends.cudnn.deterministic = True
         if use_tf32:
             torch.backends.cuda.matmul.allow_tf32 = True
             torch.backends.cudnn.allow_tf32 = True
@@ -639,8 +657,12 @@ if __name__ == "__main__":
     # Calculate training data stats if it has not been
     if(not os.path.isfile(stats_path)):
         print("Calculating mean and std...")
+        if hparams["multigpu"]:
+            print(f"WARNING: DDP not supported for stats calculations, likely "
+                  f"to OOM when training starts. Recommended to restart after "
+                  f"stats are calculated.")
         # Calculate mean and std for training data
-        mean, std = funct.db_stats(input_path)
+        mean, std = funct.db_stats(input_path, hparams["stats_time"])
         mean = mean.item()
         std = std.item()
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")

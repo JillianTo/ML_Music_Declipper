@@ -21,14 +21,16 @@ hparams = {
             #"test_input_data_path": "/mnt/MP600/data/small/comp/test/",
             "checkpoint_path": "/mnt/PC801/declip/results/",
             "augmentation_labels": ["--01--","--10--","--11--","--20--"],
-            "max_time": 2539520,
-            "test_max_time": 6963200,
+            #"max_time": 655360,
+            "max_time": 540672,
+            "test_max_time": 1081344,
+            "stats_time": 61440000,
             "short_threshold": 0.5,
             "overlap_factor": 0.1,
             "num_workers": 0,
             "pin_memory": False,
             "prefetch_factor": None,
-            "spectrogram_autoencoder": True,
+            "transformer": True,
             "preload_weights_path": None,
             #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
             #"preload_weights_path": "/mnt/PC801/declip/results/07-28/model01.pth",
@@ -38,12 +40,12 @@ hparams = {
             "preload_scheduler_path": None,
             #"preload_scheduler_path": "/mnt/PC801/declip/results/scheduler01.pth",
             #"preload_scheduler_path": "/mnt/PC801/declip/results/07-28/scheduler01.pth",
-            #"n_ffts": [510, 2046, 8190],
             "preload_scaler_path": None,
             #"preload_scaler_path": "/mnt/PC801/declip/results/scaler01.pth",
             #"preload_scaler_path": "/mnt/PC801/declip/results/07-28/scaler01.pth",
-            "n_fft": 8192,
-            "hop_length": 512,
+            "n_fft": 4096,
+            "hop_length": 256,
+            "stats_hop_length": 512,
             "top_db": 106,
             "eps": 0.00000001,
             "scheduler_state": 0,
@@ -54,10 +56,10 @@ hparams = {
             "test_first": False,
             "autoclip": True,
             "multigpu": True, 
-            "cuda_device": 1, # Choose which single GPU to use when not using multi-GPU 
+            "cuda_device": 0, # Choose which single GPU to use when not using multi-GPU 
             "use_amp": True,
             "use_tf32": True, # GPU must be NVIDIA and Ampere or newer
-            "grad_accum": 1, # Doesn't work correctly with multi-GPU
+            "grad_accum": 1, # Higher than 1 doesn't work correctly with multi-GPU
     }
 
 with open(hparams_path, 'wb') as f:

@@ -6,8 +6,8 @@ import re
 from collections import OrderedDict
 
 from audiodataset import AudioDataset
-from autoencoder import AutoEncoder
 from functional import Functional
+from model import LSTMModel, TransformerModel
 
 import torch
 import torch.nn as nn
@@ -18,10 +18,10 @@ import torchaudio.transforms as T
 # Parameters
 path = "/mnt/PC801/declip/"
 weights_path = "/mnt/PC801/declip/results/model01.pth"
-#weights_path = "/mnt/PC801/declip/results/04-08/model04.pth"
+#weights_path = "/mnt/PC801/declip/results/08-06/model01.pth"
 stats_path = "db_stats.txt"
 output_path = "/mnt/PC801/declip/new/"
-part_time = 2662400
+part_time = 540672
 overlap_factor = 0.05
 extra_factor = 0.999
 fade_shape = 'logarithmic'
@@ -34,7 +34,7 @@ save_noeq_wav = True
 # Model hyperparameters
 hparams = Functional.get_hparams(sys.argv)
 sample_rate = hparams["expected_sample_rate"]
-spectrogram_autoencoder = hparams["spectrogram_autoencoder"]
+transformer = hparams["transformer"]
 n_fft = hparams["n_fft"]
 hop_length = hparams["hop_length"]
 use_amp = hparams["use_amp"]
@@ -62,14 +62,17 @@ else:
     sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
 
 # Get files to declip
-funct = Functional(sample_rate=sample_rate, max_time=part_time, device=device, n_fft=n_fft, hop_length=hop_length)
-dataset = AudioDataset(funct, path, None, pad_short=False, short_thres=0.00001, 
+funct = Functional(max_time=part_time, device=device, n_fft=n_fft, hop_length=hop_length)
+dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=False, short_thres=0.00001, 
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights
-if spectrogram_autoencoder:
-    model = AutoEncoder(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
-    print("Using spectrogram autoencoder")
+if transformer:
+    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
+    print("Using Transformer Encoder")
+else: 
+    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
+    print("Using LSTM")
 
 model.to(device)
 
@@ -103,11 +106,11 @@ def crossfade(filename, path, output_path, part_time, overlap_factor, extra_fact
 
         if(i == part_num):
             time = torchaudio.info(path+filename).num_frames
-            left_mean = funct.mean(abs(whole_wav[:, time-part_time:]))
-            right_mean = funct.mean(abs(part[:, :whole_wav.shape[1]-(time-part_time)]))
+            left_mean = Functional.mean(abs(whole_wav[:, time-part_time:]))
+            right_mean = Functional.mean(abs(part[:, :whole_wav.shape[1]-(time-part_time)]))
         else: 
-            left_mean = funct.mean(abs(whole_wav[:, whole_wav.shape[1]-fade_time-extra_time:]))
-            right_mean = funct.mean(abs(part[:, :fade_time+extra_time]))
+            left_mean = Functional.mean(abs(whole_wav[:, whole_wav.shape[1]-fade_time-extra_time:]))
+            right_mean = Functional.mean(abs(part[:, :fade_time+extra_time]))
 
         mean_diff = left_mean-right_mean
         #print(mean_diff)
@@ -155,8 +158,8 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
     edit_wav = tensor
 
     # Equalize volumes
-    orig_mean = funct.mean(abs(orig_wav))
-    edit_mean = funct.mean(abs(edit_wav))
+    orig_mean = Functional.mean(abs(orig_wav))
+    edit_mean = Functional.mean(abs(edit_wav))
     if(orig_mean > edit_mean):
         orig_wav = orig_wav*(edit_mean/orig_mean)
     elif(orig_mean < edit_mean):
@@ -166,7 +169,8 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
     edit_wav = torch.cat((orig_wav,edit_wav),dim=1)
 
     # Convert combined waveform into dB scale spectrogram
-    edit_wav = funct.wav_to_spec_db(edit_wav)
+    edit_wav = Functional.wav_to_spec_db(edit_wav, 2048, 512, 
+                                         hparams["top_db"])
 
     # Separate combined waveform
     orig_wav = edit_wav[:,:,:int(edit_wav.shape[2]/2)]
@@ -179,7 +183,7 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
     edit_wav = edit_wav[:,lower_f:upper_f,:]
     edit_wav = orig_wav-edit_wav
 
-    diff_db = funct.mean(edit_wav)
+    diff_db = Functional.mean(edit_wav)
     eq_db = diff_db
 
     if(eq_db > 1):
@@ -204,7 +208,8 @@ if device != "cpu":
 # Doesn't work with MPS
 else:
     autocast_device = device
-    autocast_dtype = torch.bfloat16
+    #autocast_dtype = torch.bfloat16
+    autocast_dtype = torch.float16
 
 with torch.no_grad():
     curr_filename = None
@@ -217,12 +222,12 @@ with torch.no_grad():
                 if(eq):
                     # Save whold waveform before EQ
                     if(save_noeq_wav):
-                        funct.save_wav(curr_tensor, output_path+f"noeq_"+curr_filename)
+                        Functional.save_wav(curr_tensor, sample_rate, output_path+f"noeq_"+curr_filename)
 
                     curr_tensor = equalize(curr_tensor, filename=curr_filename, save_noeq_wav=save_noeq_wav)
 
                 # Save complete waveform
-                funct.save_wav(curr_tensor, output_path+curr_filename)
+                Functional.save_wav(curr_tensor, sample_rate, output_path+curr_filename)
 
             # Reset part number and set current filename to new file
             part_num = 1
@@ -244,7 +249,7 @@ with torch.no_grad():
             torch.save(tensor, filename+".pt")
             print(f"Saved \"{filename}.pt\"")
             if(save_part_wav):
-                funct.save_wav(tensor, filename)
+                Functional.save_wav(tensor, sample_rate, filename)
 
             # Explicitly delete tensor so it doesn't stay in memory
             del tensor
@@ -256,10 +261,10 @@ with torch.no_grad():
     if(eq):
         # Save whold waveform before EQ
         if(save_noeq_wav):
-            funct.save_wav(tensor, output_path+f"noeq_"+curr_filename)
+            Functional.save_wav(tensor, sample_rate, output_path+f"noeq_"+curr_filename)
 
         tensor = equalize(tensor, filename=curr_filename, save_noeq_wav=save_noeq_wav)
 
     # Save complete waveform
-    funct.save_wav(tensor, output_path+curr_filename)
+    Functional.save_wav(tensor, sample_rate, output_path+curr_filename)
     print(f"Max VRAM used: {torch.cuda.max_memory_allocated(device={device})/1e9}GB")

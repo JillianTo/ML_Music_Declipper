@@ -10,39 +10,77 @@ import torchaudio.transforms as T
 
 class Functional():
 
-    def __init__(self, sample_rate=None, max_time=None, device=None, 
-                 n_fft=None, hop_length=None, top_db=None, 
+    def __init__(self, max_time=None, device=None, n_fft=None, hop_length=None, 
                  augmentation_lbls=None):
-        self.sample_rate = sample_rate
         self.max_time = max_time
         self.device = device
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.top_db = top_db
         self.augmentation_lbls = augmentation_lbls
 
-    def mean(self, tensor):
+    def mean(tensor):
         return torch.sum(tensor)/torch.numel(tensor)
     
-    def sum(self, tensor):
+    def sum(tensor):
         tensor = tensor[:,0,:] + tensor[:,1,:]  
         tensor = tensor.unsqueeze(1)
         return tensor
 
-    def wav_to_spec_db(self, tensor):
-        pow_spec = T.Spectrogram(n_fft=self.n_fft, hop_length=self.hop_length, 
+    def upsample(tensor, time):
+        upsampler = nn.Upsample(time)
+        upsampler = upsampler.to(tensor.device)
+        return upsampler(tensor)
+
+    def resample(tensor, old_sample_rate, new_sample_rate):
+        resampler = T.Resample(old_sample_rate, new_sample_rate, dtype=
+                               tensor.dtype)
+        resampler = resampler.to(tensor.device)
+        return resampler(tensor)
+
+    def wav_to_spec_db(self, tensor, n_fft, hop_length, top_db=None):
+        pow_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
                                  power=2)
         pow_spec = pow_spec.to(self.device)
-        amp_to_db = T.AmplitudeToDB("power", top_db=self.top_db)
+        amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
         amp_to_db = amp_to_db.to(self.device)
         
-        return amp_to_db(pow_spec(tensor))
+        return amp_to_db(pow_spec(tensor))        
 
-    def wav_to_complex(self, tensor):
-        complex_spec = T.Spectrogram(n_fft=self.n_fft, 
-                                     hop_length=self.hop_length, power=None)
-        complex_spec = complex_spec.to(self.device)
-        return  complex_spec(tensor)
+    def wav_to_complex(tensor, n_fft, hop_length):
+        complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
+                                     power=None)
+        complex_spec = complex_spec.to(tensor.device)
+        return complex_spec(tensor)
+
+    def complex_to_wav(tensor, n_fft, hop_length):
+        inv_spec = T.InverseSpectrogram(n_fft=n_fft, hop_length=hop_length)
+        inv_spec = inv_spec.to(tensor.device)
+        return inv_spec(tensor)
+
+    def wav_to_mag_phase(tensor, n_fft, hop_length):
+        # Convert input to complex spectrogram
+        x = Functional.wav_to_complex(tensor, n_fft, hop_length)
+
+        # Calculate phase of complex spectrogram
+        phase = torch.atan(x.imag/(x.real+1e-7))
+        phase[x.real < 0] += 3.14159265358979323846264338
+
+        # Calculate magnitude of complex spectrogram
+        x = torch.sqrt(torch.pow(x.real,2)+torch.pow(x.imag,2))
+        
+        # Return magnitude and phase spectrograms 
+        return (x, phase)
+
+    def mag_phase_to_wav(mag, phase, n_fft, hop_length):
+        # Upsample magnitude to match phase shape
+        x = Functional.upsample(mag, [phase.shape[2], phase.shape[3]])
+        # Combine magnitude and phase
+        x = torch.polar(x, phase)
+        # Invert spectrogram
+        x = Functional.complex_to_wav(x, n_fft, hop_length)
+        
+        # Return waveform
+        return x
 
     # Get hyperparameters from file
     def get_hparams(args):
@@ -58,7 +96,7 @@ class Functional():
 
         return hparams
 
-    def db_stats(self, input_path):
+    def db_stats(self, input_path, stats_time):
         mean = 0
         std = 0
         num_files = 0
@@ -69,21 +107,21 @@ class Functional():
                 x, _ = torchaudio.load(input_path+filename)
                 x = x.to(self.device)
 
-                # Convert input to complex spectrogram
-                x = self.wav_to_complex(x)
+                # If no batch dimension, add one
+                if x.ndim < 4:
+                    x = x.unsqueeze(0)
+                
+                # If file is above time threshold, trim it
+                if x.shape[2] > stats_time:
+                    print(f"\"{filename}\" too long, trimming")
+                    x = x[:, :, :stats_time]
 
-                # Calculate magnitude of complex spectrogram
-                x = torch.sqrt(torch.pow(x.real, 2)+torch.pow(x.imag,2))
-                amp_to_db = T.AmplitudeToDB(stype='amplitude', top_db=self.top_db)
-                amp_to_db = amp_to_db.to(self.device)
-                x = amp_to_db(x)
+                # Convert input to complex spectrogram
+                x, _ = Functional.wav_to_mag_phase(x, self.n_fft, self.hop_length)
 
                 # Calculate stats
                 curr_std, curr_mean = torch.std_mean(x) 
 
-                # Clear tensor from memory
-                del x
-                
                 # Add stats to totals
                 mean = mean + curr_mean
                 std = std + curr_std
@@ -97,17 +135,6 @@ class Functional():
         
         # Return stats
         return mean, std
-
-    def upsample(self, tensor, time):
-        upsampler = nn.Upsample(time)
-        upsampler = upsampler.to(self.device)
-        return upsampler(tensor)
-
-    def resample(self, tensor, old_sample_rate):
-        resampler = T.Resample(old_sample_rate, self.sample_rate, dtype=
-                               tensor.dtype)
-        resampler = resampler.to(self.device)
-        return resampler(tensor)
 
     def pad(self, tensor):
         w_padding = self.max_time - tensor.shape[1]
@@ -197,23 +224,24 @@ class Functional():
         return filepath
 
     # Return waveform 
-    def process_wav(self, path, fileinfo, pad_short, is_input=True):
+    def process_wav(self, path, fileinfo, sample_rate, pad_short, 
+                    is_input=True):
         # Load waveform
         filename = fileinfo[0]
         if(not is_input):
             filename = self.input_to_label_filepath(filename)
 
         wav_path = path + filename
-        wav, sample_rate = torchaudio.load(wav_path)
+        wav, wav_sample_rate = torchaudio.load(wav_path)
 
         # Move waveform to device
         #wav = wav.to(self.device)
 
         # Resample if not expected sample rate
-        if(sample_rate != self.sample_rate):
-            print(f"\"{wav_path}\" has sample rate of {sample_rate}Hz, "
+        if(wav_sample_rate != sample_rate):
+            print(f"\"{wav_path}\" has sample rate of {wav_sample_rate}Hz, "
                   f"resampling")
-            wav = self.resample(wav, sample_rate)
+            wav = Functional.resample(wav, wav_sample_rate, sample_rate)
 
         # Split waveform
         wav = self.split(wav, fileinfo[1], pad_short)
@@ -222,7 +250,8 @@ class Functional():
         return wav
     
     # Return input and label waveforms
-    def process_wavs(self, input_path, label_path, fileinfo, pad_short):
+    def process_wavs(self, input_path, label_path, fileinfo, sample_rate, 
+                     pad_short):
         # Load waveforms
         filename = fileinfo[0]
         input_wav_path = input_path + filename
@@ -236,13 +265,13 @@ class Functional():
         #label_wav = label_wav.to(self.device)
 
         # Resample if not expected sample rate
-        if(input_sample_rate != self.sample_rate):
+        if(input_sample_rate != sample_rate):
             #print(f"\"{input_wav_path}\" has sample rate of {input_sample_rate}Hz, resampling")
-            input_wav = self.resample(input_wav, input_sample_rate)
+            input_wav = Functional.resample(input_wav, input_sample_rate, sample_rate)
 
-        if(label_sample_rate != self.sample_rate):
+        if(label_sample_rate != sample_rate):
             #print(f"\"{label_wav_path}\" has sample rate of {label_sample_rate}Hz, resampling")
-            label_wav = self.resample(label_wav, label_sample_rate)
+            label_wav = Functional.resample(label_wav, label_sample_rate, sample_rate)
 
         # All DataLoader tensors should have the same time length if batch 
         # size > 1
@@ -253,7 +282,7 @@ class Functional():
         # Return input and label waveforms
         return input_wav, label_wav
 
-    def save_wav(self, tensor, output_path):
+    def save_wav(tensor, sample_rate, output_path):
         if(tensor.dim() > 2):
             tensor = torch.squeeze(tensor)
 
@@ -261,6 +290,6 @@ class Functional():
         out = tensor.to("cpu")
 
         # Save the output as a WAV file
-        torchaudio.save(output_path, out, self.sample_rate)
+        torchaudio.save(output_path, out, sample_rate)
         print(f"Saved \"{output_path}\"")
 
