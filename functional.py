@@ -21,11 +21,6 @@ class Functional():
     def mean(tensor):
         return torch.sum(tensor)/torch.numel(tensor)
     
-    def sum(tensor):
-        tensor = tensor[:,0,:] + tensor[:,1,:]  
-        tensor = tensor.unsqueeze(1)
-        return tensor
-
     def upsample(tensor, time):
         upsampler = nn.Upsample(time)
         upsampler = upsampler.to(tensor.device)
@@ -40,11 +35,55 @@ class Functional():
     def wav_to_spec_db(self, tensor, n_fft, hop_length, top_db=None):
         pow_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
                                  power=2)
-        pow_spec = pow_spec.to(self.device)
+        pow_spec = pow_spec.to(tensor.device)
         amp_to_db = T.AmplitudeToDB("power", top_db=top_db)
-        amp_to_db = amp_to_db.to(self.device)
+        amp_to_db = amp_to_db.to(tensor.device)
         
-        return amp_to_db(pow_spec(tensor))        
+        return amp_to_db(pow_spec(tensor))  
+    
+    def wav_to_mel_db(tensor, sample_rate, n_fft, hop_length, n_mels, 
+                      top_db=None):      
+        mel_spec = T.MelSpectrogram(sample_rate=sample_rate, n_fft=n_fft, 
+                                    hop_length=hop_length, n_mels=n_mels, 
+                                    power=1)
+        mel_spec = mel_spec.to(tensor.device)
+        amp_to_db = T.AmplitudeToDB("amplitude", top_db=top_db)
+        amp_to_db = amp_to_db.to(tensor.device)
+
+        return amp_to_db(mel_spec(tensor))
+
+    def calc_loss(pred, tgt, sample_rate, n_ffts, n_mels, hop_lengths=None, 
+                  top_db=None, beta=3.0):
+        loss = 0
+        for i in range(len(n_ffts)):
+            if hop_lengths == None:
+                hop_length = n_ffts[i]>>3
+            else:
+                hop_length = hop_lengths[i]
+
+            pred_spec = Functional.wav_to_mel_db(pred, sample_rate, n_ffts[i], 
+                                                 hop_length, n_mels[i], 
+                                                 top_db=top_db)
+            tgt_spec = Functional.wav_to_mel_db(tgt, sample_rate, n_ffts[i], 
+                                                hop_length, n_mels[i], 
+                                                top_db=top_db)
+            # Calculate smooth L1 loss for left+right channels
+            lr_loss = F.smooth_l1_loss(pred_spec, tgt_spec, beta=beta)
+            # Calculate and add spectral convergence of left+right channels 
+            lr_loss = lr_loss + torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec)
+            
+            # Combine stereo spectrograms to mono
+            pred_spec = Functional.wav_to_mel_db(torch.div(pred[:,0,:]+pred[:,1,:], 2), sample_rate, n_ffts[i], hop_length, n_mels[i], top_db=top_db)
+            tgt_spec = Functional.wav_to_mel_db(torch.div(tgt[:,0,:]+tgt[:,1,:], 2), sample_rate, n_ffts[i], hop_length, n_mels[i], top_db=top_db)
+            # Calculate smooth L1 loss for left+right channels
+            sum_loss = F.smooth_l1_loss(pred_spec, tgt_spec, beta=beta)
+            # Calculate and add spectral convergence of left+right channels 
+            sum_loss = sum_loss + torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec)
+            
+            loss = loss + (1/len(n_ffts))*(lr_loss*(2/3)+sum_loss*(1/3))
+
+        return loss
+                
 
     def wav_to_complex(tensor, n_fft, hop_length):
         complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
@@ -166,18 +205,20 @@ class Functional():
                         # Round down number of parts to split
                         num_parts = int(time/(self.max_time-overlap_time))
                         # Append filename and time start of each split part
-                        filelist.append([filename, 0])
+                        filelist.append([filename, 0, time])
                         for i in range(1, num_parts):
                             filelist.append([filename, ((self.max_time*i)
-                                                        -(overlap_time*i))])
+                                                        -(overlap_time*i)), 
+                                             time])
                         # If remainder is greater than threshold, add 
                         # waveform ending at end of file with length max_time
                         if(remainder > (self.max_time*short_thres)):
-                            filelist.append([filename, time-self.max_time])
+                            filelist.append([filename, time-self.max_time, 
+                                             time])
                     # Waveform is shorter than or equal to time cut off and 
                     # long enough for FFT, does not need to be split
                     elif (time > self.n_fft):
-                        filelist.append([filename, -1])
+                        filelist.append([filename, -1, time])
                     # Waveform not long enough for FFT, skip
                     else:
                         print(f"Skipping \"{input_path}{filename}\" because "
@@ -190,31 +231,35 @@ class Functional():
 
         return filelist
 
-    # Tensor should be waveform output of torchaudio.load()
-    def split(self, tensor, split_start, pad_short):
+    def get_split_wav(self, wav_path, sample_rate, split_start, total_n_frames, pad_short):
         # Waveform does not need to be split
         if(split_start < 0):
+            wav, wav_sample_rate = torchaudio.load(wav_path)
             # Pad if all waveforms need to be same time
             if(pad_short):
-                return self.pad(tensor)
-            # Else, return waveform as-is
-            else:
-                return tensor
+                wav = self.pad(wav)
         # Crop long waveform
         else:
             end_time = split_start + self.max_time
             # If split waveform length would be less than max_time
-            if(end_time > tensor.shape[1]):
-                # Pad if all waveforms need to be same time
-                if(pad_short):
-                    return self.pad(tensor[:, split_start:])
-                # Return split part as-is if time is enough for FFT
-                elif(end_time > self.n_fft):
-                    return tensor[:, split_start:]
+            if(end_time > total_n_frames):
+                # Pad if all waveforms need to be same time or if waveform is 
+                # not long enough for FFT
+                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=split_start)
+                if(end_time < self.n_fft or pad_short):
+                    wav = self.pad(wav)
             # Split waveform fits in max_time, return waveform starting at 
             # time split_start with length max_time
             else:
-                return tensor[:, split_start:split_start+self.max_time]
+                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=split_start, num_frames=self.max_time)
+
+        # Resample if not expected sample rate
+        if(wav_sample_rate != sample_rate):
+            print(f"\"{wav_path}\" has sample rate of {wav_sample_rate}Hz, "
+                  f"resampling")
+            wav = Functional.resample(wav, wav_sample_rate, sample_rate)
+        
+        return wav
 
     # Get label filename from input filepath by removing augmentation label
     def input_to_label_filepath(self, filepath):
@@ -232,19 +277,11 @@ class Functional():
             filename = self.input_to_label_filepath(filename)
 
         wav_path = path + filename
-        wav, wav_sample_rate = torchaudio.load(wav_path)
+        wav = self.get_split_wav(wav_path, sample_rate, fileinfo[1], 
+                                 fileinfo[2], pad_short)
 
         # Move waveform to device
         #wav = wav.to(self.device)
-
-        # Resample if not expected sample rate
-        if(wav_sample_rate != sample_rate):
-            print(f"\"{wav_path}\" has sample rate of {wav_sample_rate}Hz, "
-                  f"resampling")
-            wav = Functional.resample(wav, wav_sample_rate, sample_rate)
-
-        # Split waveform
-        wav = self.split(wav, fileinfo[1], pad_short)
 
         # Return waveform
         return wav
@@ -255,29 +292,18 @@ class Functional():
         # Load waveforms
         filename = fileinfo[0]
         input_wav_path = input_path + filename
-        input_wav, input_sample_rate = torchaudio.load(input_wav_path)
         label_wav_path = (label_path + filename)
         label_wav_path = self.input_to_label_filepath(label_wav_path)
-        label_wav, label_sample_rate = torchaudio.load(label_wav_path)
+        split_start = fileinfo[1]
+        total_n_frames = fileinfo[2]
+        input_wav = self.get_split_wav(input_wav_path, sample_rate, 
+                                       split_start, total_n_frames, pad_short)
+        label_wav = self.get_split_wav(label_wav_path, sample_rate, 
+                                       split_start, total_n_frames, pad_short)
 
         # Move waveforms to device
         #input_wav = input_wav.to(self.device)
         #label_wav = label_wav.to(self.device)
-
-        # Resample if not expected sample rate
-        if(input_sample_rate != sample_rate):
-            #print(f"\"{input_wav_path}\" has sample rate of {input_sample_rate}Hz, resampling")
-            input_wav = Functional.resample(input_wav, input_sample_rate, sample_rate)
-
-        if(label_sample_rate != sample_rate):
-            #print(f"\"{label_wav_path}\" has sample rate of {label_sample_rate}Hz, resampling")
-            label_wav = Functional.resample(label_wav, label_sample_rate, sample_rate)
-
-        # All DataLoader tensors should have the same time length if batch 
-        # size > 1
-        split_start = fileinfo[1]
-        input_wav = self.split(input_wav, split_start, pad_short)
-        label_wav = self.split(label_wav, split_start, pad_short)
 
         # Return input and label waveforms
         return input_wav, label_wav

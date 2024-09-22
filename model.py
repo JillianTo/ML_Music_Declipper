@@ -11,7 +11,7 @@ from functional import Functional
 
 class LSTMModel(nn.Module):
     def __init__(self, mean, std, sample_rate, n_fft, hop_length, 
-                 top_db=106, in_channels=2, first_out_channels=64, 
+                 first_out_channels, top_db=106, in_channels=2, 
                  kernel_size=(3,3), stride=(1,1), tanh_lims=[8, 4, 2, 1], 
                  norm_groups=32, lstm_layers=2, lstm_dropout=0.5):
         super(LSTMModel, self).__init__(),
@@ -303,9 +303,8 @@ class LSTMModel(nn.Module):
 
 class TransformerModel(nn.Module):
     def __init__(self, mean, std, sample_rate, n_fft, hop_length, 
-                 top_db=106, in_channels=2, first_out_channels=64, 
-                 kernel_size=(3,3), stride=(1,1), norm_groups=32, nhead=8, 
-                 tf_layers=6):
+                 first_out_channels, tf_layers, top_db=106, in_channels=2, 
+                 kernel_size=(3,3), stride=(1,1), norm_groups=32, nhead=8):
         super(TransformerModel, self).__init__(),
 
         self.mean = mean

@@ -17,12 +17,15 @@ import torchaudio.transforms as T
 
 # Parameters
 path = "/mnt/PC801/declip/"
-weights_path = "/mnt/PC801/declip/results/model01.pth"
+weights_path = "/mnt/PC801/declip/results/09-19/model01.pth"
 #weights_path = "/mnt/PC801/declip/results/08-06/model01.pth"
+first_out_channels = 64
+tf_layers = 6
 stats_path = "db_stats.txt"
-output_path = "/mnt/PC801/declip/new/"
+output_path = "/mnt/PC801/declip/new/oasis/"
 part_time = 540672
 overlap_factor = 0.05
+#overlap_factor = 0.2
 extra_factor = 0.999
 fade_shape = 'logarithmic'
 save_part_wav = False
@@ -30,6 +33,7 @@ test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
+gpu_idx = 0
 
 # Model hyperparameters
 hparams = Functional.get_hparams(sys.argv)
@@ -38,16 +42,17 @@ transformer = hparams["transformer"]
 n_fft = hparams["n_fft"]
 hop_length = hparams["hop_length"]
 use_amp = hparams["use_amp"]
+#first_out_channels = hparams["first_out_channels"]
+#tf_layers = hparams["transformer_n_layers"]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
-        "cuda:0"
+        f"cuda:{gpu_idx}"
         if torch.cuda.is_available()
         else "mps"
         if torch.backends.mps.is_available()
         else "cpu"
 )
-device = "cpu"
 print(f"Using {device} device")
 
 # Get mean and std from file
@@ -68,10 +73,10 @@ dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=Fal
 
 # Initialize model with pre-trained weights
 if transformer:
-    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
+    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate, first_out_channels=first_out_channels, tf_layers=tf_layers)
     print("Using Transformer Encoder")
 else: 
-    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate)
+    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate, first_out_channels=first_out_channels, tf_layers=tf_layers)
     print("Using LSTM")
 
 model.to(device)
@@ -208,8 +213,7 @@ if device != "cpu":
 # Doesn't work with MPS
 else:
     autocast_device = device
-    #autocast_dtype = torch.bfloat16
-    autocast_dtype = torch.float16
+    autocast_dtype = torch.bfloat16
 
 with torch.no_grad():
     curr_filename = None

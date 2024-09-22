@@ -28,7 +28,7 @@ def setup(rank, world_size):
     os.environ['MASTER_ADDR'] = 'localhost'
     os.environ['MASTER_PORT'] = '12355'
     dist.init_process_group("nccl", rank=rank, world_size=world_size, 
-                            timeout=datetime.timedelta(seconds=5400))
+                            timeout=datetime.timedelta(seconds=36000))
 
 # Destroy DDP process groups
 def cleanup():
@@ -65,12 +65,12 @@ def main(rank, world_size):
             "checkpoint_path": hparams["checkpoint_path"],
             "augmentation_labels": hparams["augmentation_labels"],
             "max_time": hparams["max_time"],
-            "test_max_time": hparams["test_max_time"],
             "short_threshold": hparams["short_threshold"],
             "overlap_factor": hparams["overlap_factor"],
             "num_workers": hparams["num_workers"],
             "pin_memory": hparams["pin_memory"],
             "prefetch_factor": hparams["prefetch_factor"],
+            "first_out_channels": hparams["first_out_channels"],
             "transformer": hparams["transformer"],
             "preload_weights_path": hparams["preload_weights_path"],
             "preload_optimizer_path": hparams["preload_optimizer_path"],
@@ -78,6 +78,8 @@ def main(rank, world_size):
             "preload_scaler_path": hparams["preload_scaler_path"],
             "n_fft": hparams["n_fft"],
             "hop_length": hparams["hop_length"],
+            "loss_n_ffts": hparams["loss_n_ffts"],
+            "n_mels": hparams["n_mels"],
             "top_db": hparams["top_db"],
             "eps": hparams["eps"],
             "scheduler_state": hparams["scheduler_state"],
@@ -109,18 +111,20 @@ def main(rank, world_size):
     checkpoint_path = hparams["checkpoint_path"]
     augmentation_lbls = hparams["augmentation_labels"]
     max_time = hparams["max_time"]
-    test_max_time = hparams["test_max_time"]
     short_thres = hparams["short_threshold"]
     overlap_factor = hparams["overlap_factor"]
     num_workers = hparams["num_workers"]
     pin_memory = hparams["pin_memory"]
     prefetch_factor = hparams["prefetch_factor"]
+    first_out_channels = hparams["first_out_channels"]
     preload_weights_path = hparams["preload_weights_path"]
     preload_opt_path = hparams["preload_optimizer_path"]
     preload_sch_path = hparams["preload_scheduler_path"]
     preload_scaler_path = hparams["preload_scaler_path"]
     n_fft = hparams["n_fft"]
     hop_length = hparams["hop_length"]
+    loss_n_ffts = hparams["loss_n_ffts"]
+    n_mels = hparams["n_mels"]
     top_db = hparams["top_db"]
     sch_state = hparams["scheduler_state"]
     factors = hparams["scheduler_factors"]
@@ -153,17 +157,14 @@ def main(rank, world_size):
     print(f"Added {len(train_data)} file pairs to training data")
 
     # Add inputs and labels to test dataset
-    test_funct = Functional(max_time=test_max_time, device=rank, n_fft=n_fft, 
-                            hop_length=hop_length, 
-                            augmentation_lbls=augmentation_lbls)
     if(test_batch_size > 1):
-        test_data = AudioDataset(test_funct, test_input_path, 
+        test_data = AudioDataset(funct, test_input_path, 
                                  test_filelist_path, sample_rate=sample_rate,
                                  label_path=label_path, 
                                  short_thres=short_thres, 
                                  overlap_factor=overlap_factor)
     else:
-        test_data = AudioDataset(test_funct, test_input_path, 
+        test_data = AudioDataset(funct, test_input_path, 
                                  test_filelist_path, sample_rate=sample_rate,
                                  pad_short=False, short_thres=short_thres, 
                                  overlap_factor=overlap_factor)
@@ -218,25 +219,31 @@ def main(rank, world_size):
     if hparams["transformer"]:
         model = TransformerModel(mean=mean, std=std, n_fft=n_fft, 
                                  hop_length=hop_length, 
-                                 sample_rate=sample_rate).to(rank)
+                                 sample_rate=sample_rate, 
+                                 first_out_channels=first_out_channels, 
+                                 tf_layers=hparams["transformer_n_layers"])
         print("Using Transformer Encoder")
     else:
         model = RNNModel(mean=mean, std=std, n_fft=n_fft, 
                          hop_length=hop_length, 
-                         sample_rate=sample_rate).to(rank)
+                         sample_rate=sample_rate,
+                         first_out_channels=first_out_channels)
         print("Using LSTM")
     #model = torch.compile(model, mode='default')
 
     # Load model weights from path if given
     if preload_weights_path != None:
         model.load_state_dict(torch.load(preload_weights_path, 
-                                         map_location=torch.device(rank)))
+                                         map_location="cpu",
+                                         weights_only=True))
         print(f"Preloaded weights from \"{preload_weights_path}\"")
 
+    # Send model to device
+    model = model.to(rank)
+
     # If using multi-GPU, set up DDP
-    if(world_size != None):
+    if world_size != None:
         model = DDP(model, device_ids=[rank], output_device=rank)
-                    #find_unused_parameters=True)
         print("Using DDP")
 
     # Initialize optimizer
@@ -249,7 +256,8 @@ def main(rank, world_size):
         print("Using autoclip")
     # Load saved optimizer from path if given
     if preload_opt_path != None:
-        optimizer.load_state_dict(torch.load(preload_opt_path))
+        optimizer.load_state_dict(torch.load(preload_opt_path, 
+                                             weights_only=True))
         if(overwrite_preload_sch):
             if(sch_state > 0):
                 for i, factor in enumerate(factors):
@@ -268,7 +276,8 @@ def main(rank, world_size):
                                                      eps=hparams["eps"])
     # Load saved scheduler from path if given
     if preload_sch_path != None:
-        scheduler.load_state_dict(torch.load(preload_sch_path))
+        scheduler.load_state_dict(torch.load(preload_sch_path, 
+                                             weights_only=True))
         if(overwrite_preload_sch):
             scheduler.factor = factors[sch_state]
             scheduler.patience = patiences[sch_state]
@@ -282,7 +291,8 @@ def main(rank, world_size):
         scaler_device = 'cuda' 
     scaler = torch.amp.GradScaler(scaler_device, enabled=use_amp) 
     if preload_scaler_path != None:
-        scaler.load_state_dict(torch.load(preload_scaler_path))
+        scaler.load_state_dict(torch.load(preload_scaler_path, 
+                                          weights_only=True))
         print(f"Preloaded scaler from \"{preload_scaler_path}\"")
     
     # Save when scheduler parameters will last be changed
@@ -306,56 +316,6 @@ def main(rank, world_size):
         torch.save(scaler.state_dict(), checkpoint_path
                    +f"scaler{(epoch+1):02d}.pth")
 
-    # Initialize loss functions
-    fft_sizes = [2048, 4096]
-    mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                   hop_sizes=[fft_size//8 for 
-                                                              fft_size in 
-                                                              fft_sizes], 
-                                                   win_lengths=fft_sizes,
-                                                   sample_rate=sample_rate, 
-                                                   perceptual_weighting=True, 
-                                                   scale=None)
-    mrstft.to(rank)
-    fft_sizes = [2048, 4096]
-    mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(fft_sizes=fft_sizes, 
-                                                       hop_sizes=[fft_size//8 
-                                                                  for fft_size 
-                                                                  in 
-                                                                  fft_sizes], 
-                                                       win_lengths=fft_sizes, 
-                                                       sample_rate=sample_rate, 
-                                                       scale='mel', n_bins=256)
-    mel_mrstft.to(rank)
-
-    # Define function for calculating loss
-    def calc_loss(pred, tgt):
-        # Make sure input waveform is same length as label
-        if(tgt.shape[2] != pred.shape[2]):
-            print(f"{fileinfo[0][0]} mismatched size, input is " 
-                  f"{pred.shape[2]} and label is "
-                  f"{tgt.shape[2]}")
-            pred = Functional.upsample(pred, tgt.shape[2])
-
-        # Scale estimate to label mean
-        #pred = pred*(funct.mean(abs(tgt))/funct.mean(abs(pred)))
-
-        # Calculate individual channel loss
-        lr_loss = mrstft(pred, tgt)
-
-        # Sum waveforms to one channel
-        pred = Functional.sum(pred)
-        tgt = Functional.sum(tgt)
-
-        # Calculate sum loss
-        sum_loss = mel_mrstft(pred, tgt)
-
-        # Average sum and individual losses
-        loss = (lr_loss*(2/3)) + (sum_loss/3)
-       
-        # Return loss
-        return loss
-
     # Define function for calculating how many train batches until checkpoint
     def calc_save_pt():
         save_point = int(len(trainloader) * save_points[sch_state])
@@ -369,7 +329,7 @@ def main(rank, world_size):
         if(batch_size > 1):
             tgt = fileinfo
         else:
-            fileinfo = (fileinfo[0][0], fileinfo[1].item())
+            fileinfo = (fileinfo[0][0], fileinfo[1].item(), fileinfo[2].item())
             tgt = funct.process_wav(label_path, fileinfo, sample_rate, 
                                     batch_size != 1, is_input=False)  
             tgt = torch.unsqueeze(tgt, dim=0)
@@ -430,7 +390,9 @@ def main(rank, world_size):
                     uncomp_wav = uncomp_wav.to(rank)
                     
                     # Calculate loss
-                    loss = calc_loss(comp_wav, uncomp_wav) / grad_accum
+                    loss = Functional.calc_loss(comp_wav, uncomp_wav, 
+                                                sample_rate, n_ffts=loss_n_ffts, 
+                                                n_mels=n_mels, top_db=top_db) / grad_accum
 
                 # Force stop if loss is nan
                 if(loss != loss):
@@ -530,11 +492,14 @@ def main(rank, world_size):
                     comp_wav = model(comp_wav)
 
                     # Get target waveform
-                    uncomp_wav = getTgt(test_batch_size, fileinfo, test_funct)
+                    uncomp_wav = getTgt(test_batch_size, fileinfo, funct)
                     uncomp_wav = uncomp_wav.to(rank)
 
                     # Calculate loss
-                    loss = calc_loss(comp_wav, uncomp_wav)
+                    loss = Functional.calc_loss(comp_wav, uncomp_wav, 
+                                                sample_rate, 
+                                                n_ffts=loss_n_ffts, 
+                                                n_mels=n_mels, top_db=top_db) 
 
                 # Add loss to total
                 loss_item = loss.item()
