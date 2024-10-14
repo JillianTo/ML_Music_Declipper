@@ -17,13 +17,13 @@ import torchaudio.transforms as T
 
 # Parameters
 path = "/mnt/PC801/declip/"
-weights_path = "/mnt/PC801/declip/results/09-19/model01.pth"
+weights_path = "/mnt/PC801/declip/results/10-06/model03.pth"
 #weights_path = "/mnt/PC801/declip/results/08-06/model01.pth"
-first_out_channels = 64
+first_out_channels = 32
 tf_layers = 6
 stats_path = "db_stats.txt"
-output_path = "/mnt/PC801/declip/new/oasis/"
-part_time = 540672
+output_path = "/mnt/PC801/declip/new/"
+part_time = 1024000
 overlap_factor = 0.05
 #overlap_factor = 0.2
 extra_factor = 0.999
@@ -33,7 +33,7 @@ test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
-gpu_idx = 0
+gpu_idx = 1
 
 # Model hyperparameters
 hparams = Functional.get_hparams(sys.argv)
@@ -41,6 +41,7 @@ sample_rate = hparams["expected_sample_rate"]
 transformer = hparams["transformer"]
 n_fft = hparams["n_fft"]
 hop_length = hparams["hop_length"]
+top_db = hparams["top_db"]
 use_amp = hparams["use_amp"]
 #first_out_channels = hparams["first_out_channels"]
 #tf_layers = hparams["transformer_n_layers"]
@@ -73,10 +74,10 @@ dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=Fal
 
 # Initialize model with pre-trained weights
 if transformer:
-    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate, first_out_channels=first_out_channels, tf_layers=tf_layers)
+    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=tf_layers)
     print("Using Transformer Encoder")
 else: 
-    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, sample_rate=sample_rate, first_out_channels=first_out_channels, tf_layers=tf_layers)
+    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=tf_layers)
     print("Using LSTM")
 
 model.to(device)
@@ -174,8 +175,7 @@ def equalize(tensor, filename, save_noeq_wav=False, thres=4):
     edit_wav = torch.cat((orig_wav,edit_wav),dim=1)
 
     # Convert combined waveform into dB scale spectrogram
-    edit_wav = Functional.wav_to_spec_db(edit_wav, 2048, 512, 
-                                         hparams["top_db"])
+    edit_wav = Functional.wav_to_spec_db(edit_wav, 2048, 512, top_db)
 
     # Separate combined waveform
     orig_wav = edit_wav[:,:,:int(edit_wav.shape[2]/2)]

@@ -1,7 +1,6 @@
 import os
 import sys
 from aim import Run, Audio
-import auraloss
 import numpy as np
 from tqdm import tqdm
 import pickle
@@ -72,6 +71,7 @@ def main(rank, world_size):
             "prefetch_factor": hparams["prefetch_factor"],
             "first_out_channels": hparams["first_out_channels"],
             "transformer": hparams["transformer"],
+            "n_layers": hparams["n_layers"],
             "preload_weights_path": hparams["preload_weights_path"],
             "preload_optimizer_path": hparams["preload_optimizer_path"],
             "preload_scheduler_path": hparams["preload_scheduler_path"],
@@ -117,6 +117,7 @@ def main(rank, world_size):
     pin_memory = hparams["pin_memory"]
     prefetch_factor = hparams["prefetch_factor"]
     first_out_channels = hparams["first_out_channels"]
+    n_layers = hparams["n_layers"]
     preload_weights_path = hparams["preload_weights_path"]
     preload_opt_path = hparams["preload_optimizer_path"]
     preload_sch_path = hparams["preload_scheduler_path"]
@@ -218,16 +219,15 @@ def main(rank, world_size):
     # Initialize model
     if hparams["transformer"]:
         model = TransformerModel(mean=mean, std=std, n_fft=n_fft, 
-                                 hop_length=hop_length, 
-                                 sample_rate=sample_rate, 
+                                 hop_length=hop_length, top_db=top_db, 
                                  first_out_channels=first_out_channels, 
-                                 tf_layers=hparams["transformer_n_layers"])
+                                 tf_layers=n_layers)
         print("Using Transformer Encoder")
     else:
         model = RNNModel(mean=mean, std=std, n_fft=n_fft, 
-                         hop_length=hop_length, 
-                         sample_rate=sample_rate,
-                         first_out_channels=first_out_channels)
+                         hop_length=hop_length, top_db=top_db, 
+                         first_out_channels=first_out_channels,
+                         lstm_layers=n_layers)
         print("Using LSTM")
     #model = torch.compile(model, mode='default')
 

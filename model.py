@@ -10,15 +10,14 @@ import time
 from functional import Functional
 
 class LSTMModel(nn.Module):
-    def __init__(self, mean, std, sample_rate, n_fft, hop_length, 
-                 first_out_channels, top_db=106, in_channels=2, 
-                 kernel_size=(3,3), stride=(1,1), tanh_lims=[8, 4, 2, 1], 
-                 norm_groups=32, lstm_layers=2, lstm_dropout=0.5):
+    def __init__(self, mean, std,  n_fft, hop_length, top_db, 
+                 first_out_channels, lstm_channels, in_channels=2, 
+                 kernel_size=(3,3), stride=(1,1), norm_groups=32, 
+                 lstm_dropout=0.5):
         super(LSTMModel, self).__init__(),
 
         self.mean = mean
         self.std = std
-        self.sample_rate = sample_rate
         self.top_db = top_db
         self.in_channels = in_channels
         self.n_fft = n_fft
@@ -32,7 +31,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
         )
         self.enc2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels, 
@@ -42,7 +40,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
         )
         self.enc3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
@@ -52,7 +49,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
         )
         self.enc4 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
@@ -62,7 +58,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
         )
         #self.enc5 = nn.Sequential(
         #    nn.Conv2d(in_channels=first_out_channels<<3, 
@@ -85,6 +80,9 @@ class LSTMModel(nn.Module):
         #    nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
         #)
 
+        # Tanh activation
+        self.tanh = nn.Tanh()        
+
         # Pool layer
         self.pool = nn.MaxPool2d((2,2), stride=2)
 
@@ -99,11 +97,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=lstm_channels>>1, 
                       out_channels=lstm_channels, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, lstm_channels),
-            nn.Conv2d(in_channels=lstm_channels, 
-                      out_channels=lstm_channels, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Tanh(),
         )
         
         self.lstm = nn.Sequential(
@@ -118,7 +111,7 @@ class LSTMModel(nn.Module):
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=lstm_channels, 
                       out_channels=lstm_channels>>1, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
 
         # Decoder layers
@@ -130,13 +123,13 @@ class LSTMModel(nn.Module):
         #    nn.Conv2d(in_channels=first_out_channels<<5, 
         #              out_channels=first_out_channels<<5, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
+        #    nn.Tanh(),
         #)
         #self.up_conv6 = nn.Sequential(
         #    nn.Upsample(scale_factor=(2,2)),
         #    nn.Conv2d(in_channels=first_out_channels<<6, 
         #              out_channels=first_out_channels<<5, 
-        #              kernel_size=kernel_size, stride=stride, padding=1),
+        #              kernel_size=(2,2), stride=stride, padding=1),
         #)
         #self.dec5 = nn.Sequential(
         #    nn.Conv2d(in_channels=first_out_channels<<5, 
@@ -146,13 +139,13 @@ class LSTMModel(nn.Module):
         #    nn.Conv2d(in_channels=first_out_channels<<4, 
         #              out_channels=first_out_channels<<4, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Hardtanh(min_val=-tanh_lims[3], max_val=tanh_lims[3]),
+        #    nn.Tanh(),
         #)
         #self.up_conv5 = nn.Sequential(
         #    nn.Upsample(scale_factor=(2,2)),
         #    nn.Conv2d(in_channels=first_out_channels<<4, 
         #              out_channels=first_out_channels<<3, 
-        #              kernel_size=kernel_size, stride=stride, padding=1),
+        #              kernel_size=(2,2), stride=stride, padding=1),
         #)
         self.dec4 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<4, 
@@ -162,13 +155,12 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[2], max_val=tanh_lims[2]),
         )
         self.up_conv4 = nn.Sequential(
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<3, 
@@ -178,13 +170,12 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[1], max_val=tanh_lims[1]),
         )
         self.up_conv3 = nn.Sequential(
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
@@ -194,13 +185,12 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
         )
         self.up_conv2 = nn.Sequential(
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
@@ -209,7 +199,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.Hardtanh(min_val=-tanh_lims[0], max_val=tanh_lims[0]),
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=in_channels, kernel_size=kernel_size, 
                       stride=stride, padding=1),
@@ -239,7 +228,7 @@ class LSTMModel(nn.Module):
         e1 = self.enc1(x)
         e2 = self.enc2(self.pool(e1))
         e3 = self.enc3(self.pool(e2))
-        e4 = self.enc4(self.pool(e3))
+        e4 = self.tanh(self.enc4(self.pool(e3)))
         #e5 = self.enc5(self.pool(e4))
         #e6 = self.enc6(self.pool(e5))
         x = self.enc_lstm(self.pool(e4))
@@ -302,14 +291,13 @@ class LSTMModel(nn.Module):
         return x
 
 class TransformerModel(nn.Module):
-    def __init__(self, mean, std, sample_rate, n_fft, hop_length, 
-                 first_out_channels, tf_layers, top_db=106, in_channels=2, 
+    def __init__(self, mean, std, n_fft, hop_length, top_db,
+                 first_out_channels, tf_layers, in_channels=2, 
                  kernel_size=(3,3), stride=(1,1), norm_groups=32, nhead=8):
         super(TransformerModel, self).__init__(),
 
         self.mean = mean
         self.std = std
-        self.sample_rate = sample_rate
         self.top_db = top_db
         self.in_channels = in_channels
         self.n_fft = n_fft
@@ -396,11 +384,6 @@ class TransformerModel(nn.Module):
             nn.Conv2d(in_channels=tf_channels>>1, 
                       out_channels=tf_channels, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, tf_channels),
-            nn.Conv2d(in_channels=tf_channels, 
-                      out_channels=tf_channels, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GELU(),
         )
         
         self.tf = nn.Sequential(
@@ -412,7 +395,7 @@ class TransformerModel(nn.Module):
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=tf_channels, 
                       out_channels=tf_channels>>1, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
 
         # Decoder layers
@@ -462,7 +445,7 @@ class TransformerModel(nn.Module):
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec3 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<3, 
@@ -478,7 +461,7 @@ class TransformerModel(nn.Module):
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec2 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<2, 
@@ -494,7 +477,7 @@ class TransformerModel(nn.Module):
             nn.Upsample(scale_factor=(2,2)),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
+                      kernel_size=(2,2), stride=stride, padding=1),
         )
         self.dec1 = nn.Sequential(
             nn.Conv2d(in_channels=first_out_channels<<1, 
