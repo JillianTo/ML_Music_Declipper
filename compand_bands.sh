@@ -20,7 +20,7 @@ rm "${output_path}"soxtmpcomp_*.wav
 num_bands=${#attack_delay[@]}
 for (( i=0 ; i<$num_bands ; i++ )); do
 	if [ $comp_lvl -eq 0 ]; then
-		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-24 -0 -90 norm
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-30 -0 -90 norm
 	elif [ $comp_lvl -eq 1 ]; then
 		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-12 -0 -90 norm
 	elif [ $comp_lvl -eq 2 ]; then
