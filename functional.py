@@ -55,7 +55,9 @@ class Functional():
     def calc_loss(pred, tgt, sample_rate, n_ffts, n_mels=None, 
                   hop_lengths=None, top_db=None):
         loss = 0
+        # Calculate loss for all defined FFT sizes
         for i in range(len(n_ffts)):
+            # If not defined, set hop length to 1/8th of FFT size
             if hop_lengths == None:
                 hop_length = n_ffts[i]>>3
             else:
@@ -66,10 +68,11 @@ class Functional():
                                                   top_db=top_db)
             tgt_spec = Functional.wav_to_spec_db(tgt, n_ffts[i], hop_length, 
                                                  top_db=top_db)
+
             # Calculate L1 loss for left+right channels
             lr_loss = F.l1_loss(pred_spec, tgt_spec)
             
-            # Calculate same loss for mel spectrogram
+            # Calculate L1 loss for mel spectrogram
             if n_mels != None:
                 pred_spec = Functional.wav_to_mel_db(pred, sample_rate, 
                                                      n_ffts[i], hop_length, 
@@ -82,15 +85,16 @@ class Functional():
             # Combine stereo waveforms to mono
             pred_mono = torch.div(pred[:,0,:]+pred[:,1,:], 2)
             tgt_mono = torch.div(tgt[:,0,:]+tgt[:,1,:], 2)
+
             # Convert mono waveform to spectrogram
-            pred_spec = Functional.wav_to_spec_db(pred_mono, n_ffts[i], hop_length, 
-                                                  top_db=top_db)
-            tgt_spec = Functional.wav_to_spec_db(tgt_mono, n_ffts[i], hop_length, 
-                                                 top_db=top_db)
-            # Calculate L1 loss for mono waveform
+            pred_spec = Functional.wav_to_spec_db(pred_mono, n_ffts[i], 
+                                                  hop_length, top_db=top_db)
+            tgt_spec = Functional.wav_to_spec_db(tgt_mono, n_ffts[i], 
+                                                 hop_length, top_db=top_db)
+            # Calculate L1 loss for mono spectrogram
             sum_loss = F.l1_loss(pred_spec, tgt_spec)
 
-            # Calculate same loss for mono mel spectrogram
+            # Calculate L1 loss for mono mel spectrogram
             if n_mels != None:
                 pred_spec = Functional.wav_to_mel_db(pred_mono, sample_rate, 
                                                      n_ffts[i], hop_length, 
@@ -99,10 +103,54 @@ class Functional():
                                                     n_ffts[i], hop_length, 
                                                     n_mels[i], top_db=top_db)
                 sum_loss = sum_loss + F.l1_loss(pred_spec, tgt_spec)
+
+            # Subtract right channel from left channel
+            #pred_mono = pred[:,0,:]-pred[:,1,:]
+            #tgt_mono = tgt[:,0,:]-tgt[:,1,:]
+
+            # Convert difference waveform to spectrogram
+            #pred_spec = Functional.wav_to_spec_db(pred_mono, n_ffts[i], 
+            #                                      hop_length, top_db=top_db)
+            #tgt_spec = Functional.wav_to_spec_db(tgt_mono, n_ffts[i], 
+            #                                     hop_length, top_db=top_db)
+
+            # Calculate L1 loss for difference spectrogram
+            #diff_loss = F.l1_loss(pred_spec, tgt_spec)
+
+            # Calculate L1 loss for difference spectrogram
+            #if n_mels != None:
+            #    pred_spec = Functional.wav_to_mel_db(pred_mono, sample_rate, 
+            #                                         n_ffts[i], hop_length, 
+            #                                         n_mels[i], top_db=top_db)
+            #    tgt_spec = Functional.wav_to_mel_db(tgt_mono, sample_rate, 
+            #                                        n_ffts[i], hop_length, 
+            #                                        n_mels[i], top_db=top_db)
+            #    diff_loss = diff_loss + F.l1_loss(pred_spec, tgt_spec)
             
             # Add loss term for this FFT size to total 
+            #loss = loss + (1/len(n_ffts))*(lr_loss*(2/3)+(sum_loss+diff_loss)*(1/3))
             loss = loss + (1/len(n_ffts))*(lr_loss*(2/3)+sum_loss*(1/3))
 
+        # Return loss term averaged across all defined FFT sizes
+        return loss
+                
+
+    def wav_to_complex(tensor, n_fft, hop_length):
+        complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
+                                     power=None)
+        complex_spec = complex_spec.to(tensor.device)
+        return complex_spec(tensor)
+
+    def complex_to_wav(tensor, n_fft, hop_length):
+        inv_spec = T.InverseSpectrogram(n_fft=n_fft, hop_length=hop_length)
+        inv_spec = inv_spec.to(tensor.device)
+        return inv_spec(tensor)
+
+    def wav_to_mag_phase(tensor, n_fft, hop_length):
+        # Convert input to complex spectrogram
+        x = Functional.wav_to_complex(tensor, n_fft, hop_length)
+
+        # Return loss term averaged across all defined FFT sizes
         return loss
                 
 

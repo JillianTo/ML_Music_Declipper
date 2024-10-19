@@ -2,8 +2,6 @@ import os
 import sys
 import math
 import pickle
-import re
-from collections import OrderedDict
 
 from audiodataset import AudioDataset
 from functional import Functional
@@ -81,15 +79,6 @@ else:
     print("Using LSTM")
 
 model.to(device)
-
-#state = torch.load(weights_path, map_location=device)
-#new_state = OrderedDict()
-#for k, v in state.items():
-#    # Remove '.module'
-#    name = k[7:]
-#    new_state[name] = v
-#model.load_state_dict(new_state)    
-
 model.load_state_dict(torch.load(weights_path, map_location=device))
 model.eval()
 
