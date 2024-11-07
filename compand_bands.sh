@@ -19,14 +19,39 @@ rm "${output_path}"soxtmpcomp_*.wav
 
 num_bands=${#attack_delay[@]}
 for (( i=0 ; i<$num_bands ; i++ )); do
-	if [ $comp_lvl -eq 0 ]; then
-		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-30 -0 -90 norm
+	if [[ "$comp_lvl" == "x"  ]]; then
+		# 1:1
+		cp "${output_path}sox_tmp_$i.wav" "${output_path}soxtmpcomp_$i.wav"
+	elif [ $comp_lvl -eq 0 ]; then
+		# 1.2:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-25 -0 -90 norm
 	elif [ $comp_lvl -eq 1 ]; then
-		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-12 -0 -90 norm
+		# 1.5:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-20 -0 -90 norm
 	elif [ $comp_lvl -eq 2 ]; then
-		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-6 -0 -90 norm
+		# 2:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-15 -0 -90 norm
 	elif [ $comp_lvl -eq 3 ]; then
-		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-70,-60,-3 -0 -90 norm
+		# 3:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-10 -0 -90 norm
+	elif [ $comp_lvl -eq 4 ]; then
+		# 4:1 
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-7.5 -0 -90 norm
+	elif [ $comp_lvl -eq 5 ]; then
+		# 5:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-6 -0 -90 norm
+	elif [ $comp_lvl -eq 6 ]; then
+		# 8:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-3.75 -0 -90 norm
+	elif [ $comp_lvl -eq 7 ]; then
+		# 10:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-3 -0 -90 norm
+	elif [ $comp_lvl -eq 8 ]; then
+		# 12:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-2.5 -0 -90 norm
+	elif [ $comp_lvl -eq 9 ]; then
+		# 20:1
+		sox --buffer $buffer --multi-threaded "${output_path}soxtmp_$i.wav" "${output_path}soxtmpcomp_$i.wav" norm compand ${attack_delay[$i]} 6:-40,-30,-1.5 -0 -90 norm
 	fi
 done
 

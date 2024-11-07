@@ -20,8 +20,8 @@ hparams = {
             #"test_input_data_path": "/mnt/MP600/data/comp/small/test/",
             "checkpoint_path": "/mnt/PC801/declip/results/",
             #"augmentation_labels": ["--01--","--10--","--11--","--20--"],
-            "augmentation_labels": ["--10--"],
-            "max_time": 1792000,
+            "augmentation_labels": ["--32--"],
+            "max_time": 2048000,
             "stats_time": 102400000,
             "short_threshold": 0.5,
             "overlap_factor": 0.1,
@@ -30,7 +30,7 @@ hparams = {
             "prefetch_factor": None,
             "first_out_channels": 32,
             "transformer": True,
-            "n_layers": 12, # Recommended: 6 for transformer, 3 for LSTM
+            "n_layers": 5, # Recommended: 6 for transformer, 3 for LSTM
             "preload_weights_path": None,
             #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
             #"preload_weights_path": "/mnt/PC801/declip/results/09-20/model01.pth",
@@ -53,7 +53,7 @@ hparams = {
             "scheduler_state": 0,
             "scheduler_factors": [0.1, 0.1, 0.1, 0.1],
             "scheduler_patiences": [0, 2, 4, 6],
-            "save_points": [0.05, 0.25,  0.5, 1],
+            "save_points": [0.025, 0.05, 0.25,  0.5, 1],
             "overwrite_preloaded_scheduler_values": False,
             "test_first": False,
             "autoclip": True,

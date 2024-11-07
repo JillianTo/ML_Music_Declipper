@@ -620,12 +620,13 @@ if __name__ == "__main__":
                            overlap_factor)
 
     # Calculate training data stats if it has not been
+    multigpu_stats = False
     if(not os.path.isfile(stats_path)):
         print("Calculating mean and std...")
         if hparams["multigpu"]:
-            print(f"WARNING: DDP not supported for stats calculations, likely "
-                  f"to OOM when training starts. Recommended to restart after "
-                  f"stats are calculated.")
+            multigpu_stats = True
+            print(f"WARNING: DDP not supported for stats calculations, rerun "
+                  f"training script after stats are calculated.")
         # Calculate mean and std for training data
         mean, std = funct.db_stats(input_path, hparams["stats_time"])
         mean = mean.item()
@@ -634,13 +635,14 @@ if __name__ == "__main__":
         with open(stats_path, 'wb') as f:
             pickle.dump([mean,std], f)
         print(f"Saved training set stats in \"{stats_path}\'")
-
-    # Check whether to use multi-GPU processing 
-    if(hparams["multigpu"] and device == cuda_device):
-        n_gpus = torch.cuda.device_count()
-        print(f"Using {n_gpus} GPUs")
-        mp.spawn(main, args=[n_gpus], nprocs=n_gpus, join=True)
-    # Else, run on one device
-    else:
-        main(device, None)
+    
+    if not multigpu_stats:
+        # Check whether to use multi-GPU processing 
+        if(hparams["multigpu"] and device == cuda_device):
+            n_gpus = torch.cuda.device_count()
+            print(f"Using {n_gpus} GPUs")
+            mp.spawn(main, args=[n_gpus], nprocs=n_gpus, join=True)
+        # Else, run on one device
+        else:
+            main(device, None)
 

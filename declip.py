@@ -17,11 +17,8 @@ import torchaudio.transforms as T
 path = "/mnt/PC801/declip/"
 weights_path = "/mnt/PC801/declip/results/10-06/model03.pth"
 #weights_path = "/mnt/PC801/declip/results/08-06/model01.pth"
-first_out_channels = 32
-tf_layers = 6
 stats_path = "db_stats.txt"
 output_path = "/mnt/PC801/declip/new/"
-part_time = 1024000
 overlap_factor = 0.05
 #overlap_factor = 0.2
 extra_factor = 0.999
@@ -36,13 +33,14 @@ gpu_idx = 1
 # Model hyperparameters
 hparams = Functional.get_hparams(sys.argv)
 sample_rate = hparams["expected_sample_rate"]
+part_time = hparams["max_time"]
 transformer = hparams["transformer"]
 n_fft = hparams["n_fft"]
 hop_length = hparams["hop_length"]
 top_db = hparams["top_db"]
 use_amp = hparams["use_amp"]
-#first_out_channels = hparams["first_out_channels"]
-#tf_layers = hparams["transformer_n_layers"]
+first_out_channels = hparams["first_out_channels"]
+tf_layers = hparams["transformer_n_layers"]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
