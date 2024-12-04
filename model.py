@@ -10,7 +10,7 @@ from functional import Functional
 
 class LSTMModel(nn.Module):
     def __init__(self, mean, std,  n_fft, hop_length, top_db, 
-                 first_out_channels, lstm_channels, in_channels=2, 
+                 first_out_channels, lstm_layers, in_channels=2, 
                  kernel_size=(3,3), stride=(1,1), norm_groups=32, 
                  lstm_dropout=0.5):
         super(LSTMModel, self).__init__(),
@@ -35,7 +35,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),
@@ -44,7 +43,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
@@ -53,7 +51,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
@@ -62,21 +59,17 @@ class LSTMModel(nn.Module):
         #    nn.Conv2d(in_channels=first_out_channels<<3, 
         #              out_channels=first_out_channels<<4, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.GroupNorm(norm_groups, first_out_channels<<4),
         #    nn.Conv2d(in_channels=first_out_channels<<4, 
         #              out_channels=first_out_channels<<4, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Hardtanh(min_val=-tanh_lims[4], max_val=tanh_lims[4]),
         #)
         #self.enc6 = nn.Sequential(
         #    nn.Conv2d(in_channels=first_out_channels<<4, 
         #              out_channels=first_out_channels<<5, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.GroupNorm(norm_groups, first_out_channels<<5),
         #    nn.Conv2d(in_channels=first_out_channels<<5, 
         #              out_channels=first_out_channels<<5, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Hardtanh(min_val=-tanh_lims[5], max_val=tanh_lims[5]),
         #)
 
         # Tanh activation
@@ -118,11 +111,9 @@ class LSTMModel(nn.Module):
         #    nn.Conv2d(in_channels=first_out_channels<<6, 
         #              out_channels=first_out_channels<<5, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.GroupNorm(norm_groups, first_out_channels<<5),
         #    nn.Conv2d(in_channels=first_out_channels<<5, 
         #              out_channels=first_out_channels<<5, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Tanh(),
         #)
         #self.up_conv6 = nn.Sequential(
         #    nn.Upsample(scale_factor=(2,2)),
@@ -134,11 +125,9 @@ class LSTMModel(nn.Module):
         #    nn.Conv2d(in_channels=first_out_channels<<5, 
         #              out_channels=first_out_channels<<4, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.GroupNorm(norm_groups, first_out_channels<<4),
         #    nn.Conv2d(in_channels=first_out_channels<<4, 
         #              out_channels=first_out_channels<<4, 
         #              kernel_size=kernel_size, stride=stride, padding=1),
-        #    nn.Tanh(),
         #)
         #self.up_conv5 = nn.Sequential(
         #    nn.Upsample(scale_factor=(2,2)),
@@ -150,7 +139,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<4, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<3),
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<3, 
                       kernel_size=kernel_size, stride=stride, padding=1),
@@ -165,7 +153,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<3, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<2),
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<2, 
                       kernel_size=kernel_size, stride=stride, padding=1),
@@ -180,7 +167,6 @@ class LSTMModel(nn.Module):
             nn.Conv2d(in_channels=first_out_channels<<2, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),
-            nn.GroupNorm(norm_groups, first_out_channels<<1),
             nn.Conv2d(in_channels=first_out_channels<<1, 
                       out_channels=first_out_channels<<1, 
                       kernel_size=kernel_size, stride=stride, padding=1),

@@ -1,7 +1,6 @@
 import os
 import sys
 from aim import Run, Audio
-import numpy as np
 from tqdm import tqdm
 import pickle
 from autoclip.torch import QuantileClip
@@ -52,15 +51,15 @@ def main(rank, world_size):
         run["hparams"] = {
             "learning_rate": hparams["learning_rate"],
             "batch_size": hparams["batch_size"],
-            "test_batch_size": hparams["test_batch_size"],
+            "val_batch_size": hparams["val_batch_size"],
             "num_epochs": hparams["num_epochs"], 
             "expected_sample_rate": hparams["expected_sample_rate"],
             "stats_path": hparams["stats_path"],
             "train_filelist_path": hparams["train_filelist_path"],
-            "test_filelist_path": hparams["test_filelist_path"],
-            "label_data_path": hparams["label_data_path"],
+            "val_filelist_path": hparams["val_filelist_path"],
+            "train_label_data_path": hparams["train_label_data_path"],
+            "val_label_data_path": hparams["val_label_data_path"],
             "input_data_path": hparams["input_data_path"],
-            "test_input_data_path": hparams["test_input_data_path"],
             "checkpoint_path": hparams["checkpoint_path"],
             "augmentation_labels": hparams["augmentation_labels"],
             "max_time": hparams["max_time"],
@@ -88,7 +87,7 @@ def main(rank, world_size):
             "save_points": hparams["save_points"],
             "overwrite_preloaded_scheduler_values": 
                 hparams["overwrite_preloaded_scheduler_values"],
-            "test_first": hparams["test_first"],
+            "val_first": hparams["val_first"],
             "autoclip": hparams["autoclip"],
             "multigpu": hparams["multigpu"], 
             "cuda_device": hparams["cuda_device"], 
@@ -101,13 +100,13 @@ def main(rank, world_size):
     learning_rate = hparams["learning_rate"]
     sample_rate = hparams["expected_sample_rate"]
     batch_size = hparams["batch_size"]
-    test_batch_size = hparams["test_batch_size"]
+    val_batch_size = hparams["val_batch_size"]
     stats_path = hparams["stats_path"]
     train_filelist_path = hparams["train_filelist_path"]
-    test_filelist_path = hparams["test_filelist_path"]
+    val_filelist_path = hparams["val_filelist_path"]
+    train_label_path = hparams["train_label_data_path"]
+    val_label_path = hparams["val_label_data_path"]
     input_path = hparams["input_data_path"]
-    test_input_path = hparams["test_input_data_path"]
-    label_path = hparams["label_data_path"]
     checkpoint_path = hparams["checkpoint_path"]
     augmentation_lbls = hparams["augmentation_labels"]
     max_time = hparams["max_time"]
@@ -132,7 +131,7 @@ def main(rank, world_size):
     patiences = hparams["scheduler_patiences"]
     overwrite_preload_sch = hparams["overwrite_preloaded_scheduler_values"]
     save_points = hparams["save_points"]
-    test_first = hparams["test_first"]
+    val_first = hparams["val_first"]
     autoclip = hparams["autoclip"]
     use_amp = hparams["use_amp"]
     grad_accum = hparams["grad_accum"]
@@ -144,32 +143,22 @@ def main(rank, world_size):
     funct = Functional(max_time=max_time, device=rank, n_fft=n_fft, 
                        hop_length=hop_length, 
                        augmentation_lbls=augmentation_lbls)
-    if(batch_size > 1):
-        train_data = AudioDataset(funct, input_path, train_filelist_path, 
-                                  sample_rate=sample_rate,
-                                  label_path=label_path, 
-                                  short_thres=short_thres,
-                                  overlap_factor=overlap_factor)
-    else:
-        train_data = AudioDataset(funct, input_path, train_filelist_path, 
-                                  sample_rate=sample_rate, pad_short=False, 
-                                  short_thres=short_thres,
-                                  overlap_factor=overlap_factor)
+
+    train_data = AudioDataset(funct, input_path, train_filelist_path,
+                              lbl_path=train_label_path, 
+                              sample_rate=sample_rate, pad_short=False, 
+                              short_thres=short_thres,
+                              overlap_factor=overlap_factor,
+                              rtn_lbl_wav=batch_size>1)
     print(f"Added {len(train_data)} file pairs to training data")
 
-    # Add inputs and labels to test dataset
-    if(test_batch_size > 1):
-        test_data = AudioDataset(funct, test_input_path, 
-                                 test_filelist_path, sample_rate=sample_rate,
-                                 label_path=label_path, 
-                                 short_thres=short_thres, 
-                                 overlap_factor=overlap_factor)
-    else:
-        test_data = AudioDataset(funct, test_input_path, 
-                                 test_filelist_path, sample_rate=sample_rate,
-                                 pad_short=False, short_thres=short_thres, 
-                                 overlap_factor=overlap_factor)
-    print(f"Added {len(test_data)} file pairs to test data")
+    # Add inputs and labels to validation dataset
+    val_data = AudioDataset(funct, input_path, val_filelist_path, 
+                            lbl_path=val_label_path, sample_rate=sample_rate,
+                            short_thres=short_thres, 
+                            overlap_factor=overlap_factor,
+                            rtn_lbl_wav=val_batch_size>1)
+    print(f"Added {len(val_data)} file pairs to validation data")
 
     # If using multi-GPU, set up samplers and dataloaders accordingly
     if(world_size != None):
@@ -177,10 +166,10 @@ def main(rank, world_size):
         train_sampler = DistributedSampler(train_data, num_replicas=world_size, 
                                            rank=rank, shuffle=True, 
                                            drop_last=False)
-        test_sampler = DistributedSampler(test_data, num_replicas=world_size, 
+        val_sampler = DistributedSampler(val_data, num_replicas=world_size, 
                                           rank=rank, shuffle=False, 
                                           drop_last=False)
-        print("Using distributed samplers for training/testing data")
+        print("Using distributed samplers for training/validation data")
 
         # Create data loader for training data 
         trainloader = DataLoader(train_data, batch_size=batch_size, 
@@ -188,9 +177,9 @@ def main(rank, world_size):
                                  num_workers=num_workers, 
                                  pin_memory=pin_memory, 
                                  prefetch_factor=prefetch_factor)
-        # Create data loader for test data 
-        testloader = DataLoader(test_data, batch_size=test_batch_size, 
-                                shuffle=False, sampler=test_sampler, 
+        # Create data loader for validation data 
+        valloader = DataLoader(val_data, batch_size=val_batch_size, 
+                                shuffle=False, sampler=val_sampler, 
                                 num_workers=num_workers, pin_memory=pin_memory, 
                                 prefetch_factor=prefetch_factor)
     # Else, set up dataloaders for single device
@@ -200,13 +189,13 @@ def main(rank, world_size):
                                  shuffle=True, num_workers=num_workers, 
                                  pin_memory=pin_memory, 
                                  prefetch_factor=prefetch_factor) 
-        # Create data loader for test data 
-        testloader = DataLoader(test_data, batch_size=test_batch_size, 
+        # Create data loader for validation data 
+        valloader = DataLoader(val_data, batch_size=val_batch_size, 
                                 shuffle=False, num_workers=num_workers, 
                                 pin_memory=pin_memory, 
                                 prefetch_factor=prefetch_factor) 
 
-    # Load stats from file if available
+    # Load stats from file
     with open(stats_path, 'rb') as f:
         db_stats = pickle.load(f)
         mean = db_stats[0]
@@ -224,10 +213,10 @@ def main(rank, world_size):
                                  tf_layers=n_layers)
         print("Using Transformer Encoder")
     else:
-        model = RNNModel(mean=mean, std=std, n_fft=n_fft, 
-                         hop_length=hop_length, top_db=top_db, 
-                         first_out_channels=first_out_channels,
-                         lstm_layers=n_layers)
+        model = LSTMModel(mean=mean, std=std, n_fft=n_fft, 
+                          hop_length=hop_length, top_db=top_db, 
+                          first_out_channels=first_out_channels,
+                          lstm_layers=n_layers)
         print("Using LSTM")
     #model = torch.compile(model, mode='default')
 
@@ -325,7 +314,7 @@ def main(rank, world_size):
             return save_point
 
     # Get target waveform from fileinfo
-    def getTgt(batch_size, fileinfo, funct):
+    def getTgt(batch_size, fileinfo, funct, label_path):
         if(batch_size > 1):
             tgt = fileinfo
         else:
@@ -337,7 +326,7 @@ def main(rank, world_size):
     
     # Steps needed for data plotting in Aim
     train_step = 0
-    test_step = 0
+    val_step = 0
 
     # Determine when to checkpoint
     save_point = calc_save_pt()
@@ -358,8 +347,8 @@ def main(rank, world_size):
         # Clear CUDA cache
         torch.cuda.empty_cache()
 
-        # Check if test should be run first
-        if(not (epoch < 1 and test_first)):
+        # Check if validation should be run first
+        if(not (epoch < 1 and val_first)):
             # If using multi-GPU, set epoch in training data sampler
             if(world_size != None):
                 train_sampler.set_epoch(epoch)
@@ -378,7 +367,6 @@ def main(rank, world_size):
                 # Set model to train state
                 model.train()
 
-
                 # Forward pass
                 with torch.autocast(device_type=autocast_device, 
                                     enabled=use_amp, dtype=autocast_dtype):
@@ -386,7 +374,8 @@ def main(rank, world_size):
                     comp_wav = model(comp_wav)
 
                     # Get target waveform
-                    uncomp_wav = getTgt(batch_size, fileinfo, funct)
+                    uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                        train_label_path)
                     uncomp_wav = uncomp_wav.to(rank)
                     
                     # Calculate loss
@@ -396,25 +385,12 @@ def main(rank, world_size):
 
                 # Force stop if loss is nan
                 if(loss != loss):
-                    sys.exit(f"Training loss is {loss} during \"{fileinfo[0]}"
-                             f"\", force exiting")
+                    sys.exit(f"Training loss is {loss} during \""
+                             f"{fileinfo[0][0]}\", force exiting")
 
                 # Backward pass: compute the gradient of the loss with respect
                 # to model parameters
                 scaler.scale(loss).backward()
-                #print(funct.mean(abs(model.enc1[2].weight.grad)))
-                #print(funct.mean(abs(model.enc2[3].weight.grad)))
-                #print(funct.mean(abs(model.enc3[3].weight.grad)))
-                #print(funct.mean(abs(model.enc4[3].weight.grad)))
-                #print(funct.mean(abs(model.enc5[3].weight.grad)))
-                #print(funct.mean(abs(model.enc6[4].weight.grad)))
-                #print(funct.mean(abs(model.enc7[4].weight.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l0.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l1.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l2.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l3.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l4.grad)))
-                #print(funct.mean(abs(model.lstm[1].weight_ih_l5.grad)))
                 
                 if (i + 1) % grad_accum == 0:
                     # Unscale to allow for gradient clipping
@@ -476,14 +452,14 @@ def main(rank, world_size):
         model.eval()
         # Don't update gradients during validation
         with torch.no_grad():
-            # Initialize total and average testing loss to zero
+            # Initialize total and average validation loss to zero
             tot_loss = 0
             avg_loss = 0
-            # Initialize tqdm progress bar for testing epoch
-            pbar = tqdm(enumerate(testloader), total=len(testloader), 
-                        desc=f"Test Epoch {epoch+1}")
+            # Initialize tqdm progress bar for validation epoch
+            pbar = tqdm(enumerate(valloader), total=len(valloader), 
+                        desc=f"Validation Epoch {epoch+1}")
 
-            # Testing phase
+            # Validation phase
             for i, (comp_wav, fileinfo) in pbar:
                 with torch.autocast(device_type="cuda", enabled=use_amp, 
                                     dtype=torch.float16):
@@ -492,7 +468,8 @@ def main(rank, world_size):
                     comp_wav = model(comp_wav)
 
                     # Get target waveform
-                    uncomp_wav = getTgt(test_batch_size, fileinfo, funct)
+                    uncomp_wav = getTgt(val_batch_size, fileinfo, funct, 
+                                        val_label_path)
                     uncomp_wav = uncomp_wav.to(rank)
 
                     # Calculate loss
@@ -510,11 +487,11 @@ def main(rank, world_size):
 
                 # Log loss to Aim
                 if world_size == None or rank == 0:
-                    run.track(loss_item, name='loss', step=test_step, 
-                              epoch=epoch+1, context={"subset":"test"})
+                    run.track(loss_item, name='loss', step=val_step, 
+                              epoch=epoch+1, context={"subset":"val"})
 
                 # Increment step for next Aim log
-                test_step += 1
+                val_step += 1
 
                 # Update tqdm progress bar 
                 pbar.set_postfix({"Loss": f"{loss_item:.4f}", 
@@ -524,12 +501,12 @@ def main(rank, world_size):
         if world_size != None:
             tot_loss = torch.tensor(tot_loss, device=rank)
             dist.all_reduce(tot_loss, dist.ReduceOp.SUM, async_op=False)
-            avg_loss = tot_loss / (len(testloader)*world_size)
+            avg_loss = tot_loss / (len(valloader)*world_size)
 
         # Save current learning rate from scheduler
         prev_lr = scheduler.get_last_lr()
 
-        # Send average testing loss to scheduler
+        # Send average validation loss to scheduler
         scheduler.step(avg_loss)
 
         # Save current learning rate from scheduler
@@ -546,12 +523,12 @@ def main(rank, world_size):
                 print(f"Scheduler changed to state {sch_state} on rank {rank}")
 
         if world_size == None or rank == 0:
-            # Log average test loss to Aim
+            # Log average validation loss to Aim
             run.track(avg_loss, name='avg_loss', step=epoch+1, epoch=epoch+1, 
-                      context={"subset":f"test"})
+                      context={"subset":f"val"})
 
-        # Check if test was run without training  
-        if(test_first and epoch < 1):
+        # Check if validation was run without training  
+        if(val_first and epoch < 1):
             # Decrement epoch number so training starts at first epoch
             epoch -= 1
         else:
@@ -584,13 +561,15 @@ if __name__ == "__main__":
    
     # Initialize variables for relevant setup parameters
     train_filelist_path = hparams["train_filelist_path"]
-    test_filelist_path = hparams["test_filelist_path"]
+    val_filelist_path = hparams["val_filelist_path"]
     max_time = hparams["max_time"]
     short_thres = hparams["short_threshold"]
     overlap_factor = hparams["overlap_factor"]
     input_path = hparams["input_data_path"]
-    test_input_path = hparams["test_input_data_path"]
+    train_label_path = hparams["train_label_data_path"]
+    val_label_path = hparams["val_label_data_path"]
     stats_path = hparams["stats_path"]
+    augmentation_lbls = hparams["augmentation_labels"]
     n_fft = hparams["n_fft"]
     hop_length = hparams["stats_hop_length"]
     top_db = hparams["top_db"]
@@ -598,7 +577,8 @@ if __name__ == "__main__":
    
     # Initialize instance of functional with relevant parameters
     funct = Functional(max_time=max_time, device=device, n_fft=n_fft, 
-                       hop_length=hop_length) 
+                       hop_length=hop_length, 
+                       augmentation_lbls=augmentation_lbls) 
 
     # Enable CUDA optimizations
     if device == cuda_device:
@@ -611,12 +591,12 @@ if __name__ == "__main__":
     # Get CPU, GPU, or MPS device for training
     # Generate training data filelist if it has not been
     if(not os.path.isfile(train_filelist_path)):
-        funct.get_filelist(input_path, short_thres, train_filelist_path, 
+        funct.get_filelist(train_label_path, short_thres, train_filelist_path, 
                            overlap_factor)
 
-    # Generate testing data filelist if it has not been
-    if(not os.path.isfile(test_filelist_path)):
-        funct.get_filelist(test_input_path, short_thres, test_filelist_path, 
+    # Generate validation data filelist if it has not been
+    if(not os.path.isfile(val_filelist_path)):
+        funct.get_filelist(val_label_path, short_thres, val_filelist_path, 
                            overlap_factor)
 
     # Calculate training data stats if it has not been
@@ -628,7 +608,8 @@ if __name__ == "__main__":
             print(f"WARNING: DDP not supported for stats calculations, rerun "
                   f"training script after stats are calculated.")
         # Calculate mean and std for training data
-        mean, std = funct.db_stats(input_path, hparams["stats_time"])
+        mean, std = funct.db_stats(input_path, train_label_path, 
+                                   hparams["stats_time"])
         mean = mean.item()
         std = std.item()
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")

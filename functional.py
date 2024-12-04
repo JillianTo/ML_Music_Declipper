@@ -205,38 +205,51 @@ class Functional():
 
         return hparams
 
-    def db_stats(self, input_path, stats_time):
+    # Get label filename from input filepath by removing augmentation label
+    def input_to_label_filepath(self, filepath):
+        file_ext = ".wav"
+        for lbl in self.augmentation_lbls:
+            filepath = filepath.replace(lbl+file_ext,file_ext)
+        return filepath
+
+    # Calculate mean and standard deviation in dB for training data spectrograms
+    def db_stats(self, input_path, train_lbl_path, stats_time):
         mean = 0
         std = 0
         num_files = 0
 
         for filename in tqdm(os.listdir(input_path)):
             if filename.endswith('.wav'):
-                # Load waveform
-                x, _ = torchaudio.load(input_path+filename)
-                x = x.to(self.device)
-
-                # If no batch dimension, add one
-                if x.ndim < 4:
-                    x = x.unsqueeze(0)
+                # Remove augmentation label from filename
+                lbl_filename = self.input_to_label_filepath(filename)
                 
-                # If file is above time threshold, trim it
-                if x.shape[2] > stats_time:
-                    print(f"\"{filename}\" too long, trimming")
-                    x = x[:, :, :stats_time]
+                # Calculate stats if current file's label exists in training set
+                if os.path.isfile(train_lbl_path+lbl_filename):
+                    # Load waveform
+                    x, _ = torchaudio.load(input_path+filename)
+                    x = x.to(self.device)
 
-                # Convert input to complex spectrogram
-                x, _ = Functional.wav_to_mag_phase(x, self.n_fft, self.hop_length)
+                    # If no batch dimension, add one
+                    if x.ndim < 4:
+                        x = x.unsqueeze(0)
+                    
+                    # If file is above time threshold, trim it
+                    if x.shape[2] > stats_time:
+                        print(f"\"{filename}\" too long, trimming")
+                        x = x[:, :, :stats_time]
 
-                # Calculate stats
-                curr_std, curr_mean = torch.std_mean(x) 
+                    # Convert input to complex spectrogram
+                    x, _ = Functional.wav_to_mag_phase(x, self.n_fft, self.hop_length)
 
-                # Add stats to totals
-                mean = mean + curr_mean
-                std = std + curr_std
+                    # Calculate stats
+                    curr_std, curr_mean = torch.std_mean(x) 
 
-                # Increment file count
-                num_files = num_files+1
+                    # Add stats to totals
+                    mean = mean + curr_mean
+                    std = std + curr_std
+
+                    # Increment file count
+                    num_files = num_files+1
 
         # Calculate average stats
         mean = mean/num_files
@@ -250,6 +263,16 @@ class Functional():
         left_pad = w_padding // 2
         right_pad = w_padding - left_pad
         return F.pad(tensor, (left_pad, right_pad))
+
+    def get_augmentation_pts(self, filename, pt_time, tot_time):
+        if self.augmentation_lbls == None:
+            return [[filename, pt_time, tot_time]]
+        else:
+            augm_pts = []
+            file_ext = ".wav"
+            for lbl in self.augmentation_lbls:
+                augm_pts.append([filename.replace(file_ext, lbl+file_ext), pt_time, tot_time])
+            return augm_pts
 
     def get_filelist(self, input_path, short_thres, filelist_path, 
                      overlap_factor):
@@ -275,20 +298,17 @@ class Functional():
                         # Round down number of parts to split
                         num_parts = int(time/(self.max_time-overlap_time))
                         # Append filename and time start of each split part
-                        filelist.append([filename, 0, time])
+                        filelist.extend(self.get_augmentation_pts(filename, 0, time))
                         for i in range(1, num_parts):
-                            filelist.append([filename, ((self.max_time*i)
-                                                        -(overlap_time*i)), 
-                                             time])
+                            filelist.extend(self.get_augmentation_pts(filename, ((self.max_time*i)-(overlap_time*i)), time))
                         # If remainder is greater than threshold, add 
                         # waveform ending at end of file with length max_time
                         if(remainder > (self.max_time*short_thres)):
-                            filelist.append([filename, time-self.max_time, 
-                                             time])
+                            filelist.extend(self.get_augmentation_pts(filename, time-self.max_time, time))
                     # Waveform is shorter than or equal to time cut off and 
                     # long enough for FFT, does not need to be split
                     elif (time > self.n_fft):
-                        filelist.append([filename, -1, time])
+                        filelist.extend(self.get_augmentation_pts(filename, -1, time))
                     # Waveform not long enough for FFT, skip
                     else:
                         print(f"Skipping \"{input_path}{filename}\" because "
@@ -331,13 +351,6 @@ class Functional():
         
         return wav
 
-    # Get label filename from input filepath by removing augmentation label
-    def input_to_label_filepath(self, filepath):
-        file_ext = ".wav"
-        for lbl in self.augmentation_lbls:
-            filepath = filepath.replace(lbl+file_ext,file_ext)
-        return filepath
-
     # Return waveform 
     def process_wav(self, path, fileinfo, sample_rate, pad_short, 
                     is_input=True):
@@ -345,7 +358,6 @@ class Functional():
         filename = fileinfo[0]
         if(not is_input):
             filename = self.input_to_label_filepath(filename)
-
         wav_path = path + filename
         wav = self.get_split_wav(wav_path, sample_rate, fileinfo[1], 
                                  fileinfo[2], pad_short)
@@ -362,7 +374,7 @@ class Functional():
         # Load waveforms
         filename = fileinfo[0]
         input_wav_path = input_path + filename
-        label_wav_path = (label_path + filename)
+        label_wav_path = label_path + filename
         label_wav_path = self.input_to_label_filepath(label_wav_path)
         split_start = fileinfo[1]
         total_n_frames = fileinfo[2]
@@ -378,7 +390,7 @@ class Functional():
         # Return input and label waveforms
         return input_wav, label_wav
 
-    def save_wav(tensor, sample_rate, output_path):
+    def save_wav(tensor, sample_rate, output_path, verbose=True):
         if(tensor.dim() > 2):
             tensor = torch.squeeze(tensor)
 
@@ -387,5 +399,6 @@ class Functional():
 
         # Save the output as a WAV file
         torchaudio.save(output_path, out, sample_rate)
-        print(f"Saved \"{output_path}\"")
+        if verbose:
+            print(f"Saved \"{output_path}\"")
 

@@ -21,10 +21,10 @@ for (( i=0 ; i<=$num_freqs ; i++ )); do
 		tmp_input="${output_path}soxtmphp_${i}.wav"
 	fi
 	if [ $i -gt 0 ]; then
-		sox "${input}" "${tmp_input}" highpass ${xo_freqs[$((i-1))]} highpass ${xo_freqs[$((i-1))]}
+		sox -V0 "${input}" "${tmp_input}" highpass ${xo_freqs[$((i-1))]} highpass ${xo_freqs[$((i-1))]}
 	fi
 	if [ $i -lt $num_freqs ]; then
-		sox "${tmp_input}" "${output_path}soxtmp_${i}.wav" lowpass ${xo_freqs[$i]} lowpass ${xo_freqs[$i]}
+		sox -V0 "${tmp_input}" "${output_path}soxtmp_${i}.wav" lowpass ${xo_freqs[$i]} lowpass ${xo_freqs[$i]}
 	fi
 done
 

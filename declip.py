@@ -15,8 +15,8 @@ import torchaudio.transforms as T
 
 # Parameters
 path = "/mnt/PC801/declip/"
-weights_path = "/mnt/PC801/declip/results/10-06/model03.pth"
-#weights_path = "/mnt/PC801/declip/results/08-06/model01.pth"
+#weights_path = "/mnt/PC801/declip/results/10-06/model03.pth"
+weights_path = "/mnt/PC801/declip/results/model01.pth"
 stats_path = "db_stats.txt"
 output_path = "/mnt/PC801/declip/new/"
 overlap_factor = 0.05
@@ -40,7 +40,7 @@ hop_length = hparams["hop_length"]
 top_db = hparams["top_db"]
 use_amp = hparams["use_amp"]
 first_out_channels = hparams["first_out_channels"]
-tf_layers = hparams["transformer_n_layers"]
+n_layers = hparams["n_layers"]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -70,10 +70,10 @@ dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=Fal
 
 # Initialize model with pre-trained weights
 if transformer:
-    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=tf_layers)
+    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=n_layers)
     print("Using Transformer Encoder")
 else: 
-    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=tf_layers)
+    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, lstm_layers=n_layers)
     print("Using LSTM")
 
 model.to(device)
