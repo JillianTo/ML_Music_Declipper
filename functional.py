@@ -146,14 +146,6 @@ class Functional():
         inv_spec = inv_spec.to(tensor.device)
         return inv_spec(tensor)
 
-    def wav_to_mag_phase(tensor, n_fft, hop_length):
-        # Convert input to complex spectrogram
-        x = Functional.wav_to_complex(tensor, n_fft, hop_length)
-
-        # Return loss term averaged across all defined FFT sizes
-        return loss
-                
-
     def wav_to_complex(tensor, n_fft, hop_length):
         complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
                                      power=None)

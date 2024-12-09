@@ -22,7 +22,7 @@ hparams = {
             "input_data_path": "/mnt/XS70/declip/comp/",
             "checkpoint_path": "/mnt/PC801/declip/results/",
             "augmentation_labels": ["--3-00--","--5-00--","--7-00--","--9-00--"],
-            "max_time": 1048576,
+            "max_time": 1024000,
             "stats_time": 102400000,
             "short_threshold": 0.5,
             "overlap_factor": 0.1,
@@ -31,7 +31,7 @@ hparams = {
             "prefetch_factor": None,
             "first_out_channels": 64,
             "transformer": True,
-            "n_layers": 9, # Recommended: 6 for transformer, 3 for LSTM
+            "n_layers": 6, # Recommended: 6 for transformer, 3 for LSTM
             "preload_weights_path": None,
             #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
             #"preload_weights_path": "/mnt/PC801/declip/results/09-20/model01.pth",

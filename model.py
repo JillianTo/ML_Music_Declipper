@@ -265,7 +265,7 @@ class LSTMModel(nn.Module):
         x = (x*self.std)+self.mean
 
         # Convert magnitude back to linear amplitude
-        x = F.DB_to_amplitude(x, 1, 0.5)
+        x = torch.pow(10, torch.div(x, 20))
         
         # Convert spectrogram to waveform
         x = Functional.mag_phase_to_wav(x, phase, self.n_fft, self.hop_length) 
@@ -553,7 +553,7 @@ class TransformerModel(nn.Module):
         x = (x*self.std)+self.mean
 
         # Convert magnitude back to linear amplitude
-        x = F.DB_to_amplitude(x, 1, 0.5)
+        x = torch.pow(10, torch.div(x, 20))
         
         # Convert spectrogram to waveform
         x = Functional.mag_phase_to_wav(x, phase, self.n_fft, self.hop_length) 
