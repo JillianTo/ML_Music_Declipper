@@ -264,6 +264,10 @@ class LSTMModel(nn.Module):
         # Unnormalize magnitude
         x = (x*self.std)+self.mean
 
+        # Clamp minimum value
+        min_db = torch.max(x)-self.top_db
+        x = torch.clamp(x, min=min_db)
+
         # Convert magnitude back to linear amplitude
         x = torch.pow(10, torch.div(x, 20))
         
@@ -551,6 +555,10 @@ class TransformerModel(nn.Module):
 
         # Unnormalize magnitude
         x = (x*self.std)+self.mean
+
+        # Clamp minimum value
+        min_db = torch.max(x)-self.top_db
+        x = torch.clamp(x, min=min_db)
 
         # Convert magnitude back to linear amplitude
         x = torch.pow(10, torch.div(x, 20))
