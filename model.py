@@ -174,7 +174,7 @@ class Model(nn.Module):
         
         # Apply encoder layers after first
         for i in range(1, self.cnn_layers):
-            skips.append(self.pool(self.encs[i](skips[i-1])))
+            skips.append(self.encs[i](self.pool(skips[i-1])))
 
         # Apply final encoder layer before bottleneck
         x = self.enc_bn(self.pool(skips[self.cnn_layers-1]))

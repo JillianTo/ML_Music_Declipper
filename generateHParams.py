@@ -21,7 +21,7 @@ hparams = {
             "input_data_path": "/mnt/XS70/declip/comp/",
             "checkpoint_path": "/mnt/PC801/declip/results/",
             "augmentation_labels": ["--4-21--","--7-21--","--7-3--","--9-3--"],
-            "max_time": 1024000,
+            "max_time": 1280000,
             "stats_time": 102400000,
             "short_threshold": 0.5,
             "overlap_factor": 0.1,
