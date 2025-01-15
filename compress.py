@@ -8,20 +8,18 @@ from functional import Functional
 
 xo_freqs = [100, 400, 1600, 6400]
 attack_delay = ["0.005,0.1", "0.003,0.05", "0.000625,0.0125", "0.0001,0.025", "0,0.025"]
-mcomp_lvls = [3, 5, 7, 9]
-comp_lvls = [[0, 0], [0, 0], [0, 0], [0, 0]]
+mcomp_lvls = [4, 7, 7, 9]
+comp_lvls = [[2, 1], [2, 1], [3], [3]]
 #buffer = 524288
 #buffer = 1048576
 #buffer = 2097152
 buffer = 4194304
-input_path = "/mnt/XS70/declip/uncomp/train/"
+input_path = "/mnt/XS70/declip/uncomp/val/"
 #input_path = "/mnt/PC801/declip/test/uncomp/"
 #tmp_path = "/mnt/PC801/declip/tmp/"
-#tmp_path = "/mnt/MP600/declip/tmp/"
 tmp_path = "/mnt/XS70/declip/tmp/"
 #output_path = "/mnt/PC801/declip/test/comp/"
 output_path = "/mnt/XS70/declip/comp/"
-#output_path = "/mnt/MP600/declip/comp/"
 #output_path = "/mnt/Ultrastar14-05/Music/New Folder/declip/comp/"
 file_check = True
 

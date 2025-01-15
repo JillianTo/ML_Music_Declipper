@@ -200,7 +200,8 @@ if device != "cpu":
 # Doesn't work with MPS
 else:
     autocast_device = device
-    autocast_dtype = torch.bfloat16
+    #autocast_dtype = torch.bfloat16
+    autocast_dtype = torch.float16
 
 with torch.no_grad():
     curr_filename = None

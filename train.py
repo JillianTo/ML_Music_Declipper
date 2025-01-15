@@ -8,7 +8,7 @@ import datetime
 
 from audiodataset import AudioDataset
 from functional import Functional
-from model import LSTMModel, TransformerModel
+from model import Model
 
 import torch
 import torch.distributed as dist
@@ -48,53 +48,10 @@ def main(rank, world_size):
         run = Run(experiment="declipper")
 
         # Log run parameters
-        run["hparams"] = {
-            "learning_rate": hparams["learning_rate"],
-            "batch_size": hparams["batch_size"],
-            "val_batch_size": hparams["val_batch_size"],
-            "num_epochs": hparams["num_epochs"], 
-            "expected_sample_rate": hparams["expected_sample_rate"],
-            "stats_path": hparams["stats_path"],
-            "train_filelist_path": hparams["train_filelist_path"],
-            "val_filelist_path": hparams["val_filelist_path"],
-            "train_label_data_path": hparams["train_label_data_path"],
-            "val_label_data_path": hparams["val_label_data_path"],
-            "input_data_path": hparams["input_data_path"],
-            "checkpoint_path": hparams["checkpoint_path"],
-            "augmentation_labels": hparams["augmentation_labels"],
-            "max_time": hparams["max_time"],
-            "short_threshold": hparams["short_threshold"],
-            "overlap_factor": hparams["overlap_factor"],
-            "num_workers": hparams["num_workers"],
-            "pin_memory": hparams["pin_memory"],
-            "prefetch_factor": hparams["prefetch_factor"],
-            "first_out_channels": hparams["first_out_channels"],
-            "transformer": hparams["transformer"],
-            "n_layers": hparams["n_layers"],
-            "preload_weights_path": hparams["preload_weights_path"],
-            "preload_optimizer_path": hparams["preload_optimizer_path"],
-            "preload_scheduler_path": hparams["preload_scheduler_path"],
-            "preload_scaler_path": hparams["preload_scaler_path"],
-            "n_fft": hparams["n_fft"],
-            "hop_length": hparams["hop_length"],
-            "loss_n_ffts": hparams["loss_n_ffts"],
-            "n_mels": hparams["n_mels"],
-            "top_db": hparams["top_db"],
-            "eps": hparams["eps"],
-            "scheduler_state": hparams["scheduler_state"],
-            "scheduler_factors": hparams["scheduler_factors"],
-            "scheduler_patiences": hparams["scheduler_patiences"],
-            "save_points": hparams["save_points"],
-            "overwrite_preloaded_scheduler_values": 
-                hparams["overwrite_preloaded_scheduler_values"],
-            "val_first": hparams["val_first"],
-            "autoclip": hparams["autoclip"],
-            "multigpu": hparams["multigpu"], 
-            "cuda_device": hparams["cuda_device"], 
-            "use_amp": hparams["use_amp"],
-            "use_tf32": hparams["use_tf32"],
-            "grad_accum": hparams["grad_accum"],
-        }
+        hparam_dict = {}
+        for hparam in hparams:
+            hparam_dict[hparam] = hparams[hparam]
+        run["hparams"] = hparam_dict
 
     # Save individual hyperparameters to variables for easier access
     learning_rate = hparams["learning_rate"]
@@ -115,8 +72,6 @@ def main(rank, world_size):
     num_workers = hparams["num_workers"]
     pin_memory = hparams["pin_memory"]
     prefetch_factor = hparams["prefetch_factor"]
-    first_out_channels = hparams["first_out_channels"]
-    n_layers = hparams["n_layers"]
     preload_weights_path = hparams["preload_weights_path"]
     preload_opt_path = hparams["preload_optimizer_path"]
     preload_sch_path = hparams["preload_scheduler_path"]
@@ -196,28 +151,24 @@ def main(rank, world_size):
                                 prefetch_factor=prefetch_factor) 
 
     # Load stats from file
-    with open(stats_path, 'rb') as f:
-        db_stats = pickle.load(f)
-        mean = db_stats[0]
-        std = db_stats[1]
-        print(f"Loaded stats from \"{stats_path}\" with mean {mean} and std "
-              f"{std}")
+    if hparams["mean_normalization"]:
+        with open(stats_path, 'rb') as f:
+            log_stats = pickle.load(f)
+            mean = log_stats[0]
+            std = log_stats[1]
+            print(f"Loaded stats from \"{stats_path}\" with mean {mean} and "
+                  f"std {std}")
+    else:
+        mean = None
+        std = None
 
     print("\nInitializing model, loss function, and optimizer...")
 
     # Initialize model
-    if hparams["transformer"]:
-        model = TransformerModel(mean=mean, std=std, n_fft=n_fft, 
-                                 hop_length=hop_length, top_db=top_db, 
-                                 first_out_channels=first_out_channels, 
-                                 tf_layers=n_layers)
-        print("Using Transformer Encoder")
-    else:
-        model = LSTMModel(mean=mean, std=std, n_fft=n_fft, 
-                          hop_length=hop_length, top_db=top_db, 
-                          first_out_channels=first_out_channels,
-                          lstm_layers=n_layers)
-        print("Using LSTM")
+    model = Model(n_fft=n_fft, hop_length=hop_length, top_db=top_db, 
+                  first_out_channels=hparams["first_out_channels"], 
+                  bn_layers=hparams["n_layers"], nhead=hparams["n_heads"], 
+                  mean=mean, std=std)
     #model = torch.compile(model, mode='default')
 
     # Load model weights from path if given
@@ -601,15 +552,15 @@ if __name__ == "__main__":
 
     # Calculate training data stats if it has not been
     multigpu_stats = False
-    if(not os.path.isfile(stats_path)):
+    if(not os.path.isfile(stats_path) and hparams["mean_normalization"]):
         print("Calculating mean and std...")
         if hparams["multigpu"]:
             multigpu_stats = True
             print(f"WARNING: DDP not supported for stats calculations, rerun "
                   f"training script after stats are calculated.")
         # Calculate mean and std for training data
-        mean, std = funct.db_stats(input_path, train_label_path, 
-                                   hparams["stats_time"])
+        mean, std = funct.log_stats(input_path, train_label_path, 
+                                   hparams["stats_time"], hparams["top_db"])
         mean = mean.item()
         std = std.item()
         print(f"Mean: {mean:.4f}, Standard Deviation: {std:.4f}")

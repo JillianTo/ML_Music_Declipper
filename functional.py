@@ -36,25 +36,31 @@ class Functional():
         mag_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
                                  power=1)
         mag_spec = mag_spec.to(tensor.device)
-        amp_to_db = T.AmplitudeToDB("amplitude", top_db=top_db)
-        amp_to_db = amp_to_db.to(tensor.device)
-        
-        return amp_to_db(mag_spec(tensor))  
+        return Functional.amp_to_db(mag_spec(tensor), top_db)  
     
-    def wav_to_mel_db(tensor, sample_rate, n_fft, hop_length, n_mels, 
-                      top_db=None):      
+    def wav_to_spec(tensor, n_fft, hop_length):
+        mag_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
+                                 power=1)
+        mag_spec = mag_spec.to(tensor.device)
+        return mag_spec(tensor)
+    
+    def wav_to_mel(tensor, sample_rate, n_fft, hop_length, n_mels):      
         mel_spec = T.MelSpectrogram(sample_rate=sample_rate, n_fft=n_fft, 
                                     hop_length=hop_length, n_mels=n_mels, 
                                     power=1)
         mel_spec = mel_spec.to(tensor.device)
-        amp_to_db = T.AmplitudeToDB("amplitude", top_db=top_db)
-        amp_to_db = amp_to_db.to(tensor.device)
+        return mel_spec(tensor)
 
-        return amp_to_db(mel_spec(tensor))
+    def amp_to_db(tensor, top_db=None):
+        amp_to_db_tf = T.AmplitudeToDB("amplitude", top_db=top_db)
+        amp_to_db_tf = amp_to_db_tf.to(tensor.device)
+        return amp_to_db_tf(tensor) 
 
     def calc_loss(pred, tgt, sample_rate, n_ffts, n_mels=None, 
-                  hop_lengths=None, top_db=None):
+                  hop_lengths=None, top_db=None, diff_loss=False, sc_scale=20):
+        # Initialize loss as 0
         loss = 0
+
         # Calculate loss for all defined FFT sizes
         for i in range(len(n_ffts)):
             # If not defined, set hop length to 1/8th of FFT size
@@ -64,22 +70,35 @@ class Functional():
                 hop_length = hop_lengths[i]
             
             # Convert stereo waveform to spectrogram
-            pred_spec = Functional.wav_to_spec_db(pred, n_ffts[i], hop_length, 
-                                                  top_db=top_db)
-            tgt_spec = Functional.wav_to_spec_db(tgt, n_ffts[i], hop_length, 
-                                                 top_db=top_db)
+            pred_spec = Functional.wav_to_spec(pred, n_ffts[i], hop_length)
+            tgt_spec = Functional.wav_to_spec(tgt, n_ffts[i], hop_length)
 
-            # Calculate L1 loss for left+right channels
-            lr_loss = F.l1_loss(pred_spec, tgt_spec)
+            # Calculate spectral convergence for stereo spectrogram
+            lr_loss = sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
+
+            # Convert spectrogram to dB scale
+            pred_spec = Functional.amp_to_db(pred_spec, top_db)
+            tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+            # Calculate L1 loss for stereo spectrogram
+            lr_loss = lr_loss + F.l1_loss(pred_spec, tgt_spec)
             
-            # Calculate L1 loss for mel spectrogram
+            # Calculate losses for stereo mel spectrogram
             if n_mels != None:
-                pred_spec = Functional.wav_to_mel_db(pred, sample_rate, 
-                                                     n_ffts[i], hop_length, 
-                                                     n_mels[i], top_db=top_db)
-                tgt_spec = Functional.wav_to_mel_db(tgt, sample_rate, 
-                                                    n_ffts[i], hop_length, 
-                                                    n_mels[i], top_db=top_db)
+                # Convert stereo waveform to mel spectrogram
+                pred_spec = Functional.wav_to_mel(pred, sample_rate, n_ffts[i], 
+                                                  hop_length, n_mels[i])
+                tgt_spec = Functional.wav_to_mel(tgt, sample_rate, n_ffts[i], 
+                                                 hop_length, n_mels[i])
+
+                # Calculate spectral convergence for mel spectrogram
+                lr_loss = lr_loss + sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
+
+                # Convert spectrogram to dB scale
+                pred_spec = Functional.amp_to_db(pred_spec, top_db)
+                tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+                # Calculate L1 loss for mel spectrogram
                 lr_loss = lr_loss + F.l1_loss(pred_spec, tgt_spec)
 
             # Combine stereo waveforms to mono
@@ -87,49 +106,88 @@ class Functional():
             tgt_mono = torch.div(tgt[:,0,:]+tgt[:,1,:], 2)
 
             # Convert mono waveform to spectrogram
-            pred_spec = Functional.wav_to_spec_db(pred_mono, n_ffts[i], 
-                                                  hop_length, top_db=top_db)
-            tgt_spec = Functional.wav_to_spec_db(tgt_mono, n_ffts[i], 
-                                                 hop_length, top_db=top_db)
-            # Calculate L1 loss for mono spectrogram
-            sum_loss = F.l1_loss(pred_spec, tgt_spec)
+            pred_spec = Functional.wav_to_spec(pred_mono, n_ffts[i], 
+                                               hop_length)
+            tgt_spec = Functional.wav_to_spec(tgt_mono, n_ffts[i], 
+                                              hop_length)
 
-            # Calculate L1 loss for mono mel spectrogram
+            # Calculate spectral convergence for difference spectrogram
+            sum_loss = sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
+
+            # Convert spectrogram to dB scale
+            pred_spec = Functional.amp_to_db(pred_spec, top_db)
+            tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+            # Calculate L1 loss for mono spectrogram
+            sum_loss = sum_loss + F.l1_loss(pred_spec, tgt_spec)
+
+            # Calculate losses for mono mel spectrogram
             if n_mels != None:
-                pred_spec = Functional.wav_to_mel_db(pred_mono, sample_rate, 
+                # Convert mono waveform to mel spectrogram
+                pred_spec = Functional.wav_to_mel(pred_mono, sample_rate, 
                                                      n_ffts[i], hop_length, 
-                                                     n_mels[i], top_db=top_db)
-                tgt_spec = Functional.wav_to_mel_db(tgt_mono, sample_rate, 
-                                                    n_ffts[i], hop_length, 
-                                                    n_mels[i], top_db=top_db)
+                                                     n_mels[i])
+                tgt_spec = Functional.wav_to_mel(tgt_mono, sample_rate, 
+                                                 n_ffts[i], hop_length, 
+                                                 n_mels[i])
+
+                # Calculate spectral convergence for mono mel spectrogram
+                sum_loss = sum_loss + sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
+            
+                # Convert spectrogram to dB scale
+                pred_spec = Functional.amp_to_db(pred_spec, top_db)
+                tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+                # Calculate L1 loss for mono mel spectrogram
                 sum_loss = sum_loss + F.l1_loss(pred_spec, tgt_spec)
 
-            # Subtract right channel from left channel
-            #pred_mono = pred[:,0,:]-pred[:,1,:]
-            #tgt_mono = tgt[:,0,:]-tgt[:,1,:]
+            # Calculate losses for difference spectrogram 
+            if diff_loss:
+                # Subtract right channel from left channel
+                pred_mono = pred[:,0,:]-pred[:,1,:]
+                tgt_mono = tgt[:,0,:]-tgt[:,1,:]
 
-            # Convert difference waveform to spectrogram
-            #pred_spec = Functional.wav_to_spec_db(pred_mono, n_ffts[i], 
-            #                                      hop_length, top_db=top_db)
-            #tgt_spec = Functional.wav_to_spec_db(tgt_mono, n_ffts[i], 
-            #                                     hop_length, top_db=top_db)
+                # Convert difference waveform to spectrogram
+                pred_spec = Functional.wav_to_spec(pred_mono, n_ffts[i], 
+                                                   hop_length)
+                tgt_spec = Functional.wav_to_spec(tgt_mono, n_ffts[i], 
+                                                  hop_length)
 
-            # Calculate L1 loss for difference spectrogram
-            #diff_loss = F.l1_loss(pred_spec, tgt_spec)
+                # Calculate spectral convergence for difference spectrogram
+                diff_loss = sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
 
-            # Calculate L1 loss for difference spectrogram
-            #if n_mels != None:
-            #    pred_spec = Functional.wav_to_mel_db(pred_mono, sample_rate, 
-            #                                         n_ffts[i], hop_length, 
-            #                                         n_mels[i], top_db=top_db)
-            #    tgt_spec = Functional.wav_to_mel_db(tgt_mono, sample_rate, 
-            #                                        n_ffts[i], hop_length, 
-            #                                        n_mels[i], top_db=top_db)
-            #    diff_loss = diff_loss + F.l1_loss(pred_spec, tgt_spec)
-            
-            # Add loss term for this FFT size to total 
-            #loss = loss + (1/len(n_ffts))*(lr_loss*(2/3)+(sum_loss+diff_loss)*(1/3))
-            loss = loss + (1/len(n_ffts))*(lr_loss*(2/3)+sum_loss*(1/3))
+                # Convert spectrogram to dB scale
+                pred_spec = Functional.amp_to_db(pred_spec, top_db)
+                tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+                # Calculate L1 loss for difference spectrogram
+                diff_loss = diff_loss + F.l1_loss(pred_spec, tgt_spec)
+
+                # Calculate losses for difference mel spectrogram
+                if n_mels != None:
+                    # Convert difference waveform to mel spectrogram
+                    pred_spec = Functional.wav_to_mel(pred_mono, sample_rate, 
+                                                      n_ffts[i], hop_length, 
+                                                      n_mels[i])
+                    tgt_spec = Functional.wav_to_mel(tgt_mono, sample_rate, 
+                                                     n_ffts[i], hop_length, 
+                                                     n_mels[i])
+
+                    # Calculate spectral convergence for mel spectrogram
+                    diff_loss = diff_loss + sc_scale*(torch.linalg.norm(torch.sub(tgt_spec, pred_spec))/torch.linalg.norm(tgt_spec))
+                
+                    # Convert spectrogram to dB scale
+                    pred_spec = Functional.amp_to_db(pred_spec, top_db)
+                    tgt_spec = Functional.amp_to_db(tgt_spec, top_db)
+
+                    # Calculate L1 loss for difference spectrogram
+                    diff_loss = diff_loss + F.l1_loss(pred_spec, tgt_spec)
+
+                # Add loss term for this FFT size to total 
+                loss = loss + (1/len(n_ffts))*(lr_loss+torch.div(sum_loss, 2)+torch.div(diff_loss, 2))
+            else:
+                # Add loss term for this FFT size to total 
+                loss = loss + (1/len(n_ffts))*(lr_loss+torch.div(sum_loss, 2))
 
         # Return loss term averaged across all defined FFT sizes
         return loss
@@ -204,11 +262,29 @@ class Functional():
             filepath = filepath.replace(lbl+file_ext,file_ext)
         return filepath
 
-    # Calculate mean and standard deviation in dB for training data spectrograms
-    def db_stats(self, input_path, train_lbl_path, stats_time):
+    # Set variable floor based on maximum value in channel dimension of
+    # spectrogram
+    # Adapted from torchaudio.Functional.amplitude_to_DB
+    def dim_floor(tensor, top):
+        # Expand batch
+        shape = tensor.size()
+        out = tensor.reshape(-1, shape[-3], shape[-2], shape[-1])
+        out = torch.max(out, (out.amax(dim=(-3, -2, -1)) - top).view(-1, 1, 1, 1))
+
+        # Repack batch
+        out = out.reshape(shape)
+
+        return out
+
+    # Calculate mean and standard deviation in log10 for training data 
+    # spectrograms
+    def log_stats(self, input_path, train_lbl_path, stats_time, top_db):
         mean = 0
         std = 0
         num_files = 0
+
+        if top_db != None:
+            top_log = top_db/20
 
         for filename in tqdm(os.listdir(input_path)):
             if filename.endswith('.wav'):
@@ -232,6 +308,14 @@ class Functional():
 
                     # Convert input to complex spectrogram
                     x, _ = Functional.wav_to_mag_phase(x, self.n_fft, self.hop_length)
+
+                    # Convert magnitude from linear to log10
+                    x = torch.log10(x)
+
+                    # Clamp minimum value
+                    if top_db != None:
+                        floor = torch.max(x)-top_log
+                        x = torch.clamp(x, min=floor)
 
                     # Calculate stats
                     curr_std, curr_mean = torch.std_mean(x) 
