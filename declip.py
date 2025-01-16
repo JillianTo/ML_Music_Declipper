@@ -5,7 +5,7 @@ import pickle
 
 from audiodataset import AudioDataset
 from functional import Functional
-from model import LSTMModel, TransformerModel
+from model import Model
 
 import torch
 import torch.nn as nn
@@ -34,13 +34,10 @@ gpu_idx = 1
 hparams = Functional.get_hparams(sys.argv)
 sample_rate = hparams["expected_sample_rate"]
 part_time = hparams["max_time"]
-transformer = hparams["transformer"]
 n_fft = hparams["n_fft"]
 hop_length = hparams["hop_length"]
 top_db = hparams["top_db"]
 use_amp = hparams["use_amp"]
-first_out_channels = hparams["first_out_channels"]
-n_layers = hparams["n_layers"]
 
 # Get CPU, GPU, or MPS device for inference
 device = (
@@ -53,15 +50,19 @@ device = (
 print(f"Using {device} device")
 
 # Get mean and std from file
-if(os.path.isfile(stats_path)):
-    with open(stats_path, 'rb') as f:
-        #db_stats = torch.load(f, map_location=torch.device(device))
-        db_stats = pickle.load(f)
-        mean = db_stats[0]
-        std = db_stats[1]
-        print(f"Loaded mean {mean:.4f} and std {std:.4f} from \'{stats_path}\'")
+if hparams["mean_normalization"]:
+    if(os.path.isfile(stats_path)):
+        with open(stats_path, 'rb') as f:
+            #db_stats = torch.load(f, map_location=torch.device(device))
+            db_stats = pickle.load(f)
+            mean = db_stats[0]
+            std = db_stats[1]
+            print(f"Loaded mean {mean:.4f} and std {std:.4f} from \'{stats_path}\'")
+    else:
+        sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
 else:
-    sys.exit(f'\'{stats_path}\' does not exist, force quitting.')
+    mean = None
+    std = None
 
 # Get files to declip
 funct = Functional(max_time=part_time, device=device, n_fft=n_fft, hop_length=hop_length)
@@ -69,12 +70,9 @@ dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=Fal
                        overlap_factor=overlap_factor)
 
 # Initialize model with pre-trained weights
-if transformer:
-    model = TransformerModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, tf_layers=n_layers)
-    print("Using Transformer Encoder")
-else: 
-    model = LSTMModel(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, top_db=top_db, first_out_channels=first_out_channels, lstm_layers=n_layers)
-    print("Using LSTM")
+model = Model(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, 
+              top_db=top_db, first_out_channels=hparams["first_out_channels"], 
+              bn_layers=hparams["n_layers"], nhead=hparams["n_heads"])
 
 model.to(device)
 model.load_state_dict(torch.load(weights_path, map_location=device))
