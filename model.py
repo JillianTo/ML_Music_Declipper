@@ -18,11 +18,16 @@ class Model(nn.Module):
 
         self.n_fft = n_fft
         self.hop_length = hop_length
-        self.top_log = top_db/20
         self.cnn_layers = cnn_layers
         self.nhead = nhead
         self.mean = mean
         self.std = std
+
+        # Determine log range if top_db is provided
+        if top_db != None:
+            self.top_log = top_db/20
+        else:
+            self.top_log = top_db
 
         # Determine which activation function to use
         if activation == 'relu':
@@ -33,6 +38,8 @@ class Model(nn.Module):
             act = nn.ELU()
         elif activation == 'tanh':
             act = nn.Tanh()
+        elif activation == 'identity':
+            act = nn.Identity()
 
         # Encoder layers
         self.encs = nn.ModuleList([nn.Sequential(
@@ -159,7 +166,10 @@ class Model(nn.Module):
         x = torch.log10(x)
 
         # Clamp minimum value
-        floor = torch.max(x)-self.top_log
+        if self.top_log != None:
+            floor = torch.max(x)-self.top_log
+        else:
+            floor = -10
         x = torch.clamp(x, min=floor)
 
         # Standardize magnitude
@@ -224,7 +234,8 @@ class Model(nn.Module):
             x = (x*self.std)+self.mean
 
         # Clamp minimum value
-        floor = torch.max(x)-self.top_log
+        if self.top_log != None:
+            floor = torch.max(x)-self.top_log
         x = torch.clamp(x, min=floor)
 
         # Convert magnitude back to linear amplitude
@@ -235,5 +246,4 @@ class Model(nn.Module):
 
         # Set output to same time length as original input
         x = upsample(x)
-   
         return x

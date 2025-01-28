@@ -76,6 +76,7 @@ def main(rank, world_size):
     preload_opt_path = hparams["preload_optimizer_path"]
     preload_sch_path = hparams["preload_scheduler_path"]
     preload_scaler_path = hparams["preload_scaler_path"]
+    preload_train_info_path = hparams["preload_train_info_path"]
     n_fft = hparams["n_fft"]
     hop_length = hparams["hop_length"]
     loss_n_ffts = hparams["loss_n_ffts"]
@@ -239,7 +240,7 @@ def main(rank, world_size):
     sch_change = len(factors) - 1
 
     # Define local function for saving model, optimizer, and scheduler states
-    def save_states(epoch):
+    def save_states(epoch, idx=None):
         # If using multi-GPU, save model module 
         if world_size != None: 
             torch.save(model.module.state_dict(), checkpoint_path 
@@ -256,13 +257,17 @@ def main(rank, world_size):
         torch.save(scaler.state_dict(), checkpoint_path
                    +f"scaler{(epoch+1):02d}.pth")
 
+        # Save current epoch and item index if set to do so
+        if preload_train_info_path != None:
+            with open(preload_train_info_path, 'wb') as f:
+                pickle.dump([epoch,idx], f)
+
     # Define function for calculating how many train batches until checkpoint
     def calc_save_pt():
         save_point = int(len(trainloader) * save_points[sch_state])
         if save_point < 1:
-            return 999
-        else:
-            return save_point
+            print("WARNING: Invalid interval to make checkpoint")
+        return save_point
 
     # Get target waveform from fileinfo
     def getTgt(batch_size, fileinfo, funct, label_path):
@@ -292,9 +297,27 @@ def main(rank, world_size):
         autocast_device = rank
         autocast_dtype = torch.bfloat16
 
+    # Load epoch and index to start from if file path exists and model 
+    # checkpoint was loaded 
+    if(preload_weights_path != None and preload_train_info_path != None 
+       and os.path.isfile(preload_train_info_path)):
+        with open(preload_train_info_path, 'rb') as f:
+            train_info = pickle.load(f)
+            start_epoch = train_info[0]
+            start_idx = train_info[1]
+            # If start_idx is None, train_info was saved at the end of an 
+            # epoch, start at epoch after one specified
+            if start_idx == None:
+                start_epoch = start_epoch+1
+                start_idx = -1
+    # Else, start epoch and index at beginning
+    else:
+        start_epoch = 0
+        start_idx = -1
+
     # Training Loop
     print("\nStarting training loop...")
-    for epoch in range(hparams["num_epochs"]):
+    for epoch in range(start_epoch, hparams["num_epochs"]):
         # Clear CUDA cache
         torch.cuda.empty_cache()
 
@@ -315,75 +338,81 @@ def main(rank, world_size):
 
             # Training phase
             for i, (comp_wav, fileinfo) in pbar:
-                # Set model to train state
-                model.train()
+                if i > start_idx:
+                    # Set model to train state
+                    model.train()
 
-                # Forward pass
-                with torch.autocast(device_type=autocast_device, 
-                                    enabled=use_amp, dtype=autocast_dtype):
-                    comp_wav = comp_wav.to(rank)
-                    comp_wav = model(comp_wav)
+                    # Forward pass
+                    with torch.autocast(device_type=autocast_device, 
+                                        enabled=use_amp, dtype=autocast_dtype):
+                        comp_wav = comp_wav.to(rank)
+                        comp_wav = model(comp_wav)
 
-                    # Get target waveform
-                    uncomp_wav = getTgt(batch_size, fileinfo, funct, 
-                                        train_label_path)
-                    uncomp_wav = uncomp_wav.to(rank)
+                        # Get target waveform
+                        uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                            train_label_path)
+                        uncomp_wav = uncomp_wav.to(rank)
+                        
+                        # Calculate loss
+                        loss = Functional.calc_loss(comp_wav, uncomp_wav, 
+                                                    sample_rate, n_ffts=loss_n_ffts, 
+                                                    n_mels=n_mels, top_db=top_db) / grad_accum
+
+                    # Force stop if loss is nan
+                    if(loss != loss):
+                        sys.exit(f"Training loss is {loss} during \""
+                                 f"{fileinfo[0][0]}\", force exiting")
+
+                    # Force stop if loss is inf
+                    if(torch.isinf(loss)):
+                        sys.exit(f"Training loss is {loss} during \""
+                                 f"{fileinfo[0][0]}\", force exiting")
+
+                    # Backward pass: compute the gradient of the loss with respect
+                    # to model parameters
+                    scaler.scale(loss).backward()
                     
-                    # Calculate loss
-                    loss = Functional.calc_loss(comp_wav, uncomp_wav, 
-                                                sample_rate, n_ffts=loss_n_ffts, 
-                                                n_mels=n_mels, top_db=top_db) / grad_accum
+                    if (i + 1) % grad_accum == 0:
+                        # Unscale to allow for gradient clipping
+                        scaler.unscale_(optimizer)
 
-                # Force stop if loss is nan
-                if(loss != loss):
-                    sys.exit(f"Training loss is {loss} during \""
-                             f"{fileinfo[0][0]}\", force exiting")
+                        # Update the model's parameters using the optimizer's step 
+                        # method
+                        scaler.step(optimizer)
+                        scaler.update()
 
-                # Backward pass: compute the gradient of the loss with respect
-                # to model parameters
-                scaler.scale(loss).backward()
-                
-                if (i + 1) % grad_accum == 0:
-                    # Unscale to allow for gradient clipping
-                    scaler.unscale_(optimizer)
+                        # Zero the gradients of all optimized variables. This is to 
+                        # ensure that we don't accumulate gradients from previous 
+                        # batches, as gradients are accumulated by default in 
+                        # PyTorch
+                        optimizer.zero_grad(set_to_none=True)
 
-                    # Update the model's parameters using the optimizer's step 
-                    # method
-                    scaler.step(optimizer)
-                    scaler.update()
+                    # Add loss to total
+                    loss_item = loss.item() * grad_accum
+                    tot_loss += loss_item
 
-                    # Zero the gradients of all optimized variables. This is to 
-                    # ensure that we don't accumulate gradients from previous 
-                    # batches, as gradients are accumulated by default in 
-                    # PyTorch
-                    optimizer.zero_grad(set_to_none=True)
+                    # Calculate average loss so far
+                    avg_loss = tot_loss / (i-start_idx)
 
-                # Add loss to total
-                loss_item = loss.item() * grad_accum
-                tot_loss += loss_item
-
-                # Calculate average loss so far
-                avg_loss = tot_loss / (i+1)
-
-                # Log loss to Aim
-                if world_size == None or rank == 0:
-                    run.track(loss_item, name='loss', step=train_step, 
-                              epoch=epoch+1, context={"subset":f"train"})
-
-                # Update tqdm progress bar 
-                pbar.set_postfix({"Loss": f"{loss_item:.4f}", 
-                                  "Avg Loss": f"{avg_loss:.4f}"})
-
-                # Increment step for next Aim log
-                train_step = train_step + 1
-
-                # If training has completed for save_point number of batches
-                if(i%save_point == 0 and i > 0):
-                    # If multi-GPU is enabled, make sure you are saving from 
-                    # the first device
+                    # Log loss to Aim
                     if world_size == None or rank == 0:
-                        # Save current model, optimizer, and scheduler states
-                        save_states(epoch)
+                        run.track(loss_item, name='loss', step=train_step, 
+                                  epoch=epoch+1, context={"subset":f"train"})
+
+                    # Update tqdm progress bar 
+                    pbar.set_postfix({"Loss": f"{loss_item:.4f}", 
+                                      "Avg Loss": f"{avg_loss:.4f}"})
+
+                    # Increment step for next Aim log
+                    train_step = train_step + 1
+
+                    # If training has completed for save_point number of batches
+                    if(i%save_point == 0 and i > 0):
+                        # If multi-GPU is enabled, make sure you are saving from 
+                        # the first device
+                        if world_size == None or rank == 0:
+                            # Save current model, optimizer, and scheduler states
+                            save_states(epoch, i)
 
             # Calculate average loss from both GPU if multi-GPU was used
             if world_size != None:
@@ -395,9 +424,19 @@ def main(rank, world_size):
             if world_size == None or rank == 0:
                 run.track(avg_loss, name='avg_loss', step=epoch+1, 
                           epoch=epoch+1, context={"subset":f"train"})
-            
-            # Clear CUDA cache
-            torch.cuda.empty_cache()
+        
+        # Clear CUDA cache
+        torch.cuda.empty_cache()
+
+        # Reset start_idx to beginning, it only needs to be checked during 
+        # start_epoch
+        if epoch == start_epoch:
+            start_idx = -1
+
+        # Save current model, optimizer, and scheduler states after finishing 
+        # training epoch
+        if((not (val_first and epoch < 1)) and (world_size == None or rank == 0)):
+            save_states(epoch)
 
         # Set model to validation state
         model.eval()
@@ -482,10 +521,6 @@ def main(rank, world_size):
         if(val_first and epoch < 1):
             # Decrement epoch number so training starts at first epoch
             epoch -= 1
-        else:
-            # Save current model, optimizer, and scheduler states
-            if world_size == None or rank == 0:
-                save_states(epoch)
 
     # If multi-GPU was used, cleanup before exiting 
     if(world_size != None):
@@ -570,8 +605,8 @@ if __name__ == "__main__":
     
     if not multigpu_stats:
         # Check whether to use multi-GPU processing 
-        if(hparams["multigpu"] and device == cuda_device):
-            n_gpus = torch.cuda.device_count()
+        n_gpus = torch.cuda.device_count()
+        if(hparams["multigpu"] and device == cuda_device and n_gpus > 1):
             print(f"Using {n_gpus} GPUs")
             mp.spawn(main, args=[n_gpus], nprocs=n_gpus, join=True)
         # Else, run on one device
