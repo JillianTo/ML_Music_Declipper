@@ -38,6 +38,8 @@ class Model(nn.Module):
             act = nn.ELU()
         elif activation == 'tanh':
             act = nn.Tanh()
+        elif activation == 'hardtanh':
+            act = nn.Hardtanh()
         elif activation == 'identity':
             act = nn.Identity()
 
@@ -47,10 +49,10 @@ class Model(nn.Module):
                                               out_channels=first_out_channels, 
                                               kernel_size=first_kernel_size, 
                                               stride=stride, padding=1),
-                                    nn.Conv2d(in_channels=first_out_channels, 
-                                              out_channels=first_out_channels, 
-                                              kernel_size=first_kernel_size, 
-                                              stride=stride, padding=1),
+                                    #nn.Conv2d(in_channels=first_out_channels, 
+                                    #          out_channels=first_out_channels, 
+                                    #          kernel_size=first_kernel_size, 
+                                    #          stride=stride, padding=1),
                                     act,
                                  )])
         for i in range(1, cnn_layers):
@@ -63,10 +65,10 @@ class Model(nn.Module):
                 self.encs[i].append(nn.GroupNorm(norm_groups, 
                                                  first_out_channels<<i))
 
-            self.encs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
-                                          out_channels=first_out_channels<<i, 
-                                          kernel_size=kernel_size, 
-                                          stride=stride, padding=1))
+                self.encs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
+                                              out_channels=first_out_channels<<i, 
+                                              kernel_size=kernel_size, 
+                                              stride=stride, padding=1))
             self.encs[i].append(act)
 
         # Pool layer
@@ -115,10 +117,10 @@ class Model(nn.Module):
                                               out_channels=first_out_channels, 
                                               kernel_size=kernel_size, 
                                               stride=stride, padding=1),
-                                    nn.Conv2d(in_channels=first_out_channels, 
-                                              out_channels=first_out_channels, 
-                                              kernel_size=first_kernel_size, 
-                                              stride=stride, padding=1),
+                                    #nn.Conv2d(in_channels=first_out_channels, 
+                                    #          out_channels=first_out_channels, 
+                                    #          kernel_size=first_kernel_size, 
+                                    #          stride=stride, padding=1),
                                     act,
                                     nn.Conv2d(in_channels=first_out_channels, 
                                               out_channels=in_channels, 
@@ -138,10 +140,10 @@ class Model(nn.Module):
                                           stride=stride, padding=1))
             if norm_groups != None:
                 nn.GroupNorm(norm_groups, first_out_channels<<i),
-            self.decs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
-                                          out_channels=first_out_channels<<i, 
-                                          kernel_size=kernel_size, 
-                                          stride=stride, padding=1))
+                self.decs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
+                                              out_channels=first_out_channels<<i, 
+                                              kernel_size=kernel_size, 
+                                              stride=stride, padding=1))
             self.decs[i].append(act)
             
             # Upsample section
@@ -169,7 +171,7 @@ class Model(nn.Module):
         if self.top_log != None:
             floor = torch.max(x)-self.top_log
         else:
-            floor = -10
+            floor = -8
         x = torch.clamp(x, min=floor)
 
         # Standardize magnitude
@@ -177,7 +179,7 @@ class Model(nn.Module):
             x = (x-self.mean)/self.std
         
         # Flip sign
-        x = -x
+        #x = -x
 
         # Apply first encoder layer
         skips = [self.encs[0](x)]
@@ -227,7 +229,7 @@ class Model(nn.Module):
             x = self.decs[curr_idx](x)
 
         # Flip sign
-        x = -x
+        #x = -x
 
         # Unnormalize magnitude
         if self.mean != None:
@@ -246,4 +248,4 @@ class Model(nn.Module):
 
         # Set output to same time length as original input
         x = upsample(x)
-        return x
+        return torch.clamp(x, min=-1, max=1)

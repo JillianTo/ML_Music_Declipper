@@ -5,10 +5,15 @@ from tqdm import tqdm
 import pickle
 from autoclip.torch import QuantileClip
 import datetime
+import random
+import string
 
 from audiodataset import AudioDataset
 from functional import Functional
 from model import Model
+from bs_roformer import BSRoformer, MelBandRoformer
+from SCNet.scnet.SCNet import SCNet
+from SCNet.scnet.loss import spec_rmse_loss
 
 import torch
 import torch.distributed as dist
@@ -42,17 +47,6 @@ def main(rank, world_size):
     # Load hyperparameters
     hparams = Functional.get_hparams(sys.argv)
 
-    # Initialize Aim run on master process
-    if world_size == None or rank == 0:
-        # Initialize a new Aim run
-        run = Run(experiment="declipper")
-
-        # Log run parameters
-        hparam_dict = {}
-        for hparam in hparams:
-            hparam_dict[hparam] = hparams[hparam]
-        run["hparams"] = hparam_dict
-
     # Save individual hyperparameters to variables for easier access
     learning_rate = hparams["learning_rate"]
     sample_rate = hparams["expected_sample_rate"]
@@ -77,6 +71,8 @@ def main(rank, world_size):
     preload_sch_path = hparams["preload_scheduler_path"]
     preload_scaler_path = hparams["preload_scaler_path"]
     preload_train_info_path = hparams["preload_train_info_path"]
+    n_layers = hparams["n_layers"]
+    n_heads = hparams["n_heads"]
     n_fft = hparams["n_fft"]
     hop_length = hparams["hop_length"]
     loss_n_ffts = hparams["loss_n_ffts"]
@@ -91,6 +87,47 @@ def main(rank, world_size):
     autoclip = hparams["autoclip"]
     use_amp = hparams["use_amp"]
     grad_accum = hparams["grad_accum"]
+    ext_model = hparams["ext_model"]
+
+    # Determine if we should start first epoch at a presaved point
+    resume = (world_size != None and preload_weights_path != None 
+              and preload_train_info_path != None 
+              and os.path.isfile(preload_train_info_path))
+
+    # Load epoch and index to start from if file path exists and model 
+    # checkpoint was loaded 
+    if resume:
+        with open(preload_train_info_path, 'rb') as f:
+            train_info = pickle.load(f)
+            start_epoch = train_info[0]
+            start_idx = train_info[1]
+            # If start_idx is None, train_info was saved at the end of an 
+            # epoch, start at epoch after one specified
+            if start_idx == None:
+                start_epoch = start_epoch+1
+                start_idx = -1
+    # Else, start epoch and index at beginning
+    else:
+        start_epoch = 0
+        start_idx = -1
+
+    # Initialize Aim run on master process
+    if world_size == None or rank == 0:
+        # If resuming from previous run, load that run
+        if resume: 
+            run_hash = train_info[2]
+            run = Run(experiment="declipper", run_hash=run_hash)
+        # Else, generate new run
+        else:
+            # Initialize a new Aim run
+            run = Run(experiment="declipper")
+            run_hash = run.hash
+
+            # Log run parameters
+            hparam_dict = {}
+            for hparam in hparams:
+                hparam_dict[hparam] = hparams[hparam]
+            run["hparams"] = hparam_dict
 
     # Load wavs into training data
     print("\nLoading data...")
@@ -102,9 +139,10 @@ def main(rank, world_size):
 
     train_data = AudioDataset(funct, input_path, train_filelist_path,
                               lbl_path=train_label_path, 
-                              sample_rate=sample_rate, pad_short=False, 
+                              sample_rate=sample_rate, 
                               short_thres=short_thres,
                               overlap_factor=overlap_factor,
+                              rtn_input_wav=not resume,
                               rtn_lbl_wav=batch_size>1)
     print(f"Added {len(train_data)} file pairs to training data")
 
@@ -166,10 +204,74 @@ def main(rank, world_size):
     print("\nInitializing model, loss function, and optimizer...")
 
     # Initialize model
-    model = Model(n_fft=n_fft, hop_length=hop_length, top_db=top_db, 
-                  first_out_channels=hparams["first_out_channels"], 
-                  bn_layers=hparams["n_layers"], nhead=hparams["n_heads"], 
-                  mean=mean, std=std)
+    if ext_model == 'roformer':
+        # Copied from DEFAULT_FREQS_PER_BANDS in bs_roformer.py, default 
+        # parameter for FFT size of 2048
+        freqs_per_bands = (
+          2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+          2, 2, 2, 2, 2, 2, 2, 2, 2, 2,
+          2, 2, 2, 2,
+          4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4,
+          12, 12, 12, 12, 12, 12, 12, 12,
+          24, 24, 24, 24, 24, 24, 24, 24,
+          48, 48, 48, 48, 48, 48, 48, 48,
+          128, 129,
+        )
+        # Check if FFT size is multiple of 1024
+        if n_fft != 2048 and n_fft%1024 == 0:
+            # Scale number of frequencies per band depending on FFT size
+            scalar = n_fft/2048
+            freqs_per_bands = [scalar*freq for freq in freqs_per_bands]
+            # Last number of frequencies should only be 1 more than previous 
+            # band
+            freqs_per_bands[len(freqs_per_bands)-1] = freqs_per_bands[len(freqs_per_bands)-1]-scalar+1
+            # Convert list into tuple
+            freqs_per_bands = tuple(freqs_per_bands)
+        # If FFT size is not a multiple of 1024, you would need to manually set
+        # freqs_per_bands
+        else: 
+           sys.exit(f"No default band-split parameter in BS-RoFormer for FFT "
+                    f"size that is not a multiple of 1024, force exiting") 
+
+        model = BSRoformer(dim=384, depth=n_layers, stereo=True, 
+                           time_transformer_depth=1, freq_transformer_depth=1,
+                           freqs_per_bands=freqs_per_bands, heads=n_heads,
+                           dim_freqs_in=n_fft/2+1, stft_n_fft=n_fft, 
+                           stft_hop_length=hop_length, stft_win_length=n_fft,
+                           multi_stft_resolutions_window_sizes=loss_n_ffts)
+        model_str = f"Using BS-RoFormer with "
+    elif ext_model == 'mel_roformer':
+        model = MelBandRoformer(dim=128, depth=n_layers, stereo=True, 
+                                time_transformer_depth=1, 
+                                freq_transformer_depth=1, num_bands=64, 
+                                dim_freqs_in=n_fft/2+1, 
+                                sample_rate=sample_rate, stft_n_fft=n_fft, 
+                                stft_hop_length=hop_length, 
+                                stft_win_length=n_fft, 
+                                multi_stft_resolutions_window_sizes=loss_n_ffts,
+                                multi_stft_hop_size=128)
+        model_str = f"Using Mel-Band RoFormer with "
+    elif ext_model == 'scnet':
+        model = SCNet(sources=['other'], dims = [4, 64, 128, 256], nfft=n_fft, 
+                      hop_size=hop_length, win_size=n_fft, normalized=False,
+                      num_dplayer=n_layers)
+        loss_stft_config = { 'n_fft': n_fft, 'hop_length': hop_length, 
+                             'win_length': n_fft, 'center': True, 
+                             'normalized': False }
+        model_str = f"Using SCNet with "
+    else:
+        model = Model(n_fft=n_fft, hop_length=hop_length, top_db=top_db, 
+                      first_out_channels=hparams["first_out_channels"], 
+                      bn_layers=n_layers, nhead=n_heads, 
+                      mean=mean, std=std, lstm_dropout=0.2, activation='identity')
+        if n_heads != None:
+            model_str = f"Using Transformer Encoder with "
+        else:
+            model_str = f"Using LSTM with "
+
+    # Print model and number of parameters
+    model_str = model_str + f"{round(Functional.get_n_params(model)/1000000,2)}M parameters"
+    print(model_str)
     #model = torch.compile(model, mode='default')
 
     # Load model weights from path if given
@@ -241,11 +343,17 @@ def main(rank, world_size):
 
     # Define local function for saving model, optimizer, and scheduler states
     def save_states(epoch, idx=None):
-        # If using multi-GPU, save model module 
+        # If using multi-GPU
         if world_size != None: 
+            # Save model module
             torch.save(model.module.state_dict(), checkpoint_path 
                        +f"model{(epoch+1):02d}.pth")
-        # Else, save model directly
+
+            # Save current epoch and item index if set to do so
+            if preload_train_info_path != None:
+                with open(preload_train_info_path, 'wb') as f:
+                    pickle.dump([epoch,idx,run_hash], f)
+        # If not using multi-GPU, save model directly
         else:
             torch.save(model.state_dict(), checkpoint_path 
                        +f"model{(epoch+1):02d}.pth")
@@ -256,11 +364,6 @@ def main(rank, world_size):
                    +f"scheduler{(epoch+1):02d}.pth")
         torch.save(scaler.state_dict(), checkpoint_path
                    +f"scaler{(epoch+1):02d}.pth")
-
-        # Save current epoch and item index if set to do so
-        if preload_train_info_path != None:
-            with open(preload_train_info_path, 'wb') as f:
-                pickle.dump([epoch,idx], f)
 
     # Define function for calculating how many train batches until checkpoint
     def calc_save_pt():
@@ -276,7 +379,7 @@ def main(rank, world_size):
         else:
             fileinfo = (fileinfo[0][0], fileinfo[1].item(), fileinfo[2].item())
             tgt = funct.process_wav(label_path, fileinfo, sample_rate, 
-                                    batch_size != 1, is_input=False)  
+                                    is_input=False)  
             tgt = torch.unsqueeze(tgt, dim=0)
         return tgt
     
@@ -296,24 +399,6 @@ def main(rank, world_size):
             print("WARNING: Autocast functionality not tested for MPS")
         autocast_device = rank
         autocast_dtype = torch.bfloat16
-
-    # Load epoch and index to start from if file path exists and model 
-    # checkpoint was loaded 
-    if(preload_weights_path != None and preload_train_info_path != None 
-       and os.path.isfile(preload_train_info_path)):
-        with open(preload_train_info_path, 'rb') as f:
-            train_info = pickle.load(f)
-            start_epoch = train_info[0]
-            start_idx = train_info[1]
-            # If start_idx is None, train_info was saved at the end of an 
-            # epoch, start at epoch after one specified
-            if start_idx == None:
-                start_epoch = start_epoch+1
-                start_idx = -1
-    # Else, start epoch and index at beginning
-    else:
-        start_epoch = 0
-        start_idx = -1
 
     # Training Loop
     print("\nStarting training loop...")
@@ -346,17 +431,36 @@ def main(rank, world_size):
                     with torch.autocast(device_type=autocast_device, 
                                         enabled=use_amp, dtype=autocast_dtype):
                         comp_wav = comp_wav.to(rank)
-                        comp_wav = model(comp_wav)
+                        if ext_model == 'roformer'or ext_model == 'mel_roformer':
+                            # Get target waveform
+                            uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                                train_label_path)
+                            uncomp_wav = uncomp_wav.to(rank)
+                            # Generate prediction and calculate loss
+                            loss = model(comp_wav, target=uncomp_wav)
+                        else:
+                            # Generate predition
+                            comp_wav = model(comp_wav)
 
-                        # Get target waveform
-                        uncomp_wav = getTgt(batch_size, fileinfo, funct, 
-                                            train_label_path)
-                        uncomp_wav = uncomp_wav.to(rank)
-                        
-                        # Calculate loss
-                        loss = Functional.calc_loss(comp_wav, uncomp_wav, 
-                                                    sample_rate, n_ffts=loss_n_ffts, 
-                                                    n_mels=n_mels, top_db=top_db) / grad_accum
+                            # Get target waveform
+                            uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                                train_label_path)
+                            uncomp_wav = uncomp_wav.to(rank)
+                            
+                            # Calculate loss
+                            if ext_model == 'scnet':
+                                loss = spec_rmse_loss(comp_wav, uncomp_wav, loss_stft_config)
+                            else:
+                                loss = Functional.calc_loss(comp_wav, 
+                                                            uncomp_wav, 
+                                                            sample_rate, 
+                                                            n_ffts=loss_n_ffts, 
+                                                            n_mels=n_mels, 
+                                                            top_db=top_db,
+                                                            scalar=4)
+
+                    # Average loss across gradient accumulation batch
+                    loss = loss / grad_accum
 
                     # Force stop if loss is nan
                     if(loss != loss):
@@ -403,9 +507,6 @@ def main(rank, world_size):
                     pbar.set_postfix({"Loss": f"{loss_item:.4f}", 
                                       "Avg Loss": f"{avg_loss:.4f}"})
 
-                    # Increment step for next Aim log
-                    train_step = train_step + 1
-
                     # If training has completed for save_point number of batches
                     if(i%save_point == 0 and i > 0):
                         # If multi-GPU is enabled, make sure you are saving from 
@@ -413,12 +514,18 @@ def main(rank, world_size):
                         if world_size == None or rank == 0:
                             # Save current model, optimizer, and scheduler states
                             save_states(epoch, i)
+                # Load input waveforms starting from this point 
+                elif i == start_idx:
+                    trainloader.dataset.rtn_input_wav = True
+
+                # Increment step for next Aim log
+                train_step = train_step + 1
 
             # Calculate average loss from both GPU if multi-GPU was used
             if world_size != None:
                 tot_loss = torch.tensor(tot_loss, device=rank)
                 dist.all_reduce(tot_loss, dist.ReduceOp.SUM, async_op=False)
-                avg_loss = tot_loss / (len(trainloader)*world_size)
+                avg_loss = tot_loss / ((len(trainloader)-start_idx+1)*world_size)
 
             # Log average training loss to Aim
             if world_size == None or rank == 0:
@@ -428,8 +535,8 @@ def main(rank, world_size):
         # Clear CUDA cache
         torch.cuda.empty_cache()
 
-        # Reset start_idx to beginning, it only needs to be checked during 
-        # start_epoch
+        # Reset start_idx to beginning, it only needs to be checked after
+        # resume
         if epoch == start_epoch:
             start_idx = -1
 
@@ -453,20 +560,34 @@ def main(rank, world_size):
             for i, (comp_wav, fileinfo) in pbar:
                 with torch.autocast(device_type="cuda", enabled=use_amp, 
                                     dtype=torch.float16):
-                    # Forward pass
                     comp_wav = comp_wav.to(rank)
-                    comp_wav = model(comp_wav)
+                    if ext_model == 'roformer' or ext_model == 'mel_roformer':
+                        # Get target waveform
+                        uncomp_wav = getTgt(val_batch_size, fileinfo, funct, 
+                                            val_label_path)
+                        uncomp_wav = uncomp_wav.to(rank)
+                        # Generate prediction and calculate loss
+                        loss = model(comp_wav, target=uncomp_wav)
+                    else:
+                        # Generate predition
+                        comp_wav = model(comp_wav)
 
-                    # Get target waveform
-                    uncomp_wav = getTgt(val_batch_size, fileinfo, funct, 
-                                        val_label_path)
-                    uncomp_wav = uncomp_wav.to(rank)
-
-                    # Calculate loss
-                    loss = Functional.calc_loss(comp_wav, uncomp_wav, 
-                                                sample_rate, 
-                                                n_ffts=loss_n_ffts, 
-                                                n_mels=n_mels, top_db=top_db) 
+                        # Get target waveform
+                        uncomp_wav = getTgt(val_batch_size, fileinfo, funct, 
+                                            val_label_path)
+                        uncomp_wav = uncomp_wav.to(rank)
+                        
+                        # Calculate loss
+                        if ext_model == 'scnet':
+                            loss = spec_rmse_loss(comp_wav, uncomp_wav, loss_stft_config)
+                        else:
+                            loss = Functional.calc_loss(comp_wav, 
+                                                        uncomp_wav, 
+                                                        sample_rate, 
+                                                        n_ffts=loss_n_ffts, 
+                                                        n_mels=n_mels, 
+                                                        top_db=top_db,
+                                                        scaalar=4)
 
                 # Add loss to total
                 loss_item = loss.item()

@@ -21,7 +21,7 @@ hparams = {
             "input_data_path": "/mnt/XS70/declip/comp/",
             "checkpoint_path": "/mnt/PC801/declip/results/",
             "augmentation_labels": ["--4-21--","--7-21--","--7-3--","--9-3--"],
-            "max_time": 1024000,
+            "max_time": 1764000,
             "stats_time": 102400000,
             "short_threshold": 0.5,
             "overlap_factor": 0.1,
@@ -29,8 +29,8 @@ hparams = {
             "pin_memory": False,
             "prefetch_factor": None,
             "first_out_channels": 64,
-            "n_layers": 6, # Recommended: 6 for transformer, 3 for LSTM
-            "n_heads": 8, # Set to None to use LSTM
+            "n_layers": 3, # Recommended: 6 for transformer, 3 for LSTM
+            "n_heads": None, # Recommended: 8 for transformer, set to None to use LSTM
             "preload_weights_path": None,
             #"preload_weights_path": "/mnt/PC801/declip/results/model01.pth",
             #"preload_weights_path": "/mnt/PC801/declip/results/09-20/model01.pth",
@@ -44,30 +44,30 @@ hparams = {
             #"preload_scaler_path": "/mnt/PC801/declip/results/scaler01.pth",
             #"preload_scaler_path": "/mnt/PC801/declip/results/09-20/scaler01.pth",
             "preload_train_info_path": "/mnt/PC801/declip/results/train_info.txt",
-            "n_fft": 8192,
-            "hop_length": 1024,
+            "n_fft": 4096,
+            "hop_length": 512,
             "stats_hop_length": 1024,
-            #"loss_n_ffts": [1024, 2048, 4096, 8192], 
-            "loss_n_ffts": [2048, 4096, 8192], 
-            #"n_mels": [64, 128, 256, 512],
-            "n_mels": [128, 256, 512],
+            #"loss_n_ffts": (4096, 2048, 1024, 512), 
+            "loss_n_ffts": (8192, 4096, 2048), 
+            "n_mels": (128, 128, 128),
             "top_db": None,
-            "mean_normalization": False,
+            "mean_normalization": True,
             "eps": 0.00000001,
             "scheduler_state": 0,
             #"scheduler_factors": [(1/3), 0.1, 0.1, 0.1],
             "scheduler_factors": [0.1, 0.1, 0.1],
             "scheduler_patiences": [0, 2, 4],
             #"save_points": [0.025, 0.05, 0.5, 1],
-            "save_points": [0.025, 0.5, 1],
-            "overwrite_preloaded_scheduler_values": False,
+            "save_points": [0.005, 0.5, 1],
+            "overwrite_preloaded_scheduler_values": True,
             "val_first": False,
             "autoclip": True,
             "multigpu": True, 
-            "cuda_device": 0, # Choose which single GPU to use when not using multi-GPU 
+            "cuda_device": 1, # Choose which single GPU to use when not using multi-GPU 
             "use_amp": True,
             "use_tf32": True, # GPU must be NVIDIA and Ampere or newer
             "grad_accum": 1, # Higher than 1 not tested with multi-GPU
+            "ext_model": None, # None for provided model, 'roformer' for BS-RoFormer, 'mel_roformer' for Mel-Band RoFormer, 'scnet' for SCNet
     }
 
 with open(hparams_path, 'wb') as f:

@@ -1,5 +1,4 @@
 import os
-import math
 import pickle
 from tqdm import tqdm
 import torch
@@ -52,29 +51,36 @@ class Functional():
         amp_to_db_tf = T.AmplitudeToDB("amplitude", top_db=top_db)
         amp_to_db_tf = amp_to_db_tf.to(tensor.device)
         return amp_to_db_tf(tensor) 
+    
+    # pred and tgt should be magnitude spectrograms in linear amplitude scale
+    def spec_loss(pred, tgt, scalar, top_db=None, min_log=-8):
+            # Clamp inputs
+            min_mag = 10^min_log
+            pred_clamp = torch.clamp(pred, min=min_mag)
+            tgt_clamp = torch.clamp(tgt, min=min_mag)
         
-    def spec_loss(pred, tgt, top_db, sc_scale):
             # Calculate spectral convergence 
-            loss = sc_scale*(torch.linalg.norm(torch.sub(tgt, pred))/torch.linalg.norm(tgt))
+            loss = scalar*(torch.linalg.norm(torch.sub(tgt_clamp, pred_clamp))/torch.linalg.norm(tgt_clamp))
 
-            # Convert spectrograms to dB scale
-            pred_db = Functional.amp_to_db(pred, top_db)
-            tgt_db = Functional.amp_to_db(tgt, top_db)
-
-            # If top_db is not specified, clamp target to -200 dB to prevent 
-            # -inf 
-            if top_db == None:
-                tgt_db = torch.clamp(tgt_db, min=-200)
+            # Convert spectrograms to log scale
+            if scalar != 20:
+                pred_log = scalar*torch.clamp(torch.log10(pred), min=min_log)
+                tgt_log = scalar*torch.clamp(torch.log10(tgt), min=min_log)
+            else:
+                pred_log = Functional.amp_to_db(pred, top_db)
+                tgt_log = Functional.amp_to_db(tgt, top_db)
 
             # Calculate L1 loss for dB scale spectrogram
-            l1_loss = F.l1_loss(pred_db, tgt_db)
+            l1_loss = F.l1_loss(pred_log, tgt_log)
+            
+            # Add L1 loss to spectral convergence loss
             loss = loss + l1_loss
             
             return loss
             
 
     def calc_loss(pred, tgt, sample_rate, n_ffts, n_mels=None, 
-                  hop_lengths=None, top_db=None, sc_scale=20, diff_loss=False):
+                  hop_lengths=None, top_db=None, scalar=1, diff_loss=False):
         # Initialize loss as 0
         loss = 0
 
@@ -91,7 +97,8 @@ class Functional():
             tgt_spec = Functional.wav_to_spec(tgt, n_ffts[i], hop_length)
 
             # Calculate loss for stereo spectrogram
-            lr_loss = Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+            lr_loss = Functional.spec_loss(pred_spec, tgt_spec, scalar, 
+                                           top_db=top_db)
 
             # Calculate losses for stereo mel spectrogram
             if n_mels != None:
@@ -102,7 +109,9 @@ class Functional():
                                                  hop_length, n_mels[i])
                 
                 # Calculate loss for stereo mel spectrogram
-                lr_loss = lr_loss + Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+                lr_loss = lr_loss + Functional.spec_loss(pred_spec, tgt_spec,
+                                                         scalar, 
+                                                         top_db=top_db)
 
             # Combine stereo waveforms to mono
             pred_mono = torch.div(pred[:,0,:]+pred[:,1,:], 2)
@@ -115,7 +124,8 @@ class Functional():
                                               hop_length)
 
             # Calculate spectral convergence for difference spectrogram
-            sum_loss = Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+            sum_loss = Functional.spec_loss(pred_spec, tgt_spec, scalar, 
+                                            top_db=top_db)
 
             # Calculate losses for mono mel spectrogram
             if n_mels != None:
@@ -128,7 +138,9 @@ class Functional():
                                                  n_mels[i])
 
                 # Calculate loss for mono mel spectrogram
-                sum_loss = sum_loss + Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+                sum_loss = sum_loss + Functional.spec_loss(pred_spec, tgt_spec,
+                                                           scalar, 
+                                                           top_db=top_db)
 
             # Calculate losses for difference spectrogram 
             if diff_loss:
@@ -143,7 +155,8 @@ class Functional():
                                                   hop_length)
 
                 # Calculate spectral convergence for difference spectrogram
-                diff_loss = Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+                diff_loss = Functional.spec_loss(pred_spec, tgt_spec, 
+                                                 scalar, top_db=top_db)
 
                 # Calculate losses for difference mel spectrogram
                 if n_mels != None:
@@ -156,7 +169,10 @@ class Functional():
                                                      n_mels[i])
 
                     # Calculate loss for difference mel spectrogram
-                    diff_loss = diff_loss + Functional.spec_loss(pred_spec, tgt_spec, top_db, sc_scale)
+                    diff_loss = diff_loss + Functional.spec_loss(pred_spec, 
+                                                                 tgt_spec, 
+                                                                 scalar, 
+                                                                 top_db=top_db)
 
                 # Add loss term for this FFT size to total 
                 loss = loss + (1/len(n_ffts))*(lr_loss+torch.div(sum_loss, 2)+torch.div(diff_loss, 2))
@@ -167,17 +183,6 @@ class Functional():
         # Return loss term averaged across all defined FFT sizes
         return loss
                 
-
-    def wav_to_complex(tensor, n_fft, hop_length):
-        complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
-                                     power=None)
-        complex_spec = complex_spec.to(tensor.device)
-        return complex_spec(tensor)
-
-    def complex_to_wav(tensor, n_fft, hop_length):
-        inv_spec = T.InverseSpectrogram(n_fft=n_fft, hop_length=hop_length)
-        inv_spec = inv_spec.to(tensor.device)
-        return inv_spec(tensor)
 
     def wav_to_complex(tensor, n_fft, hop_length):
         complex_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
@@ -247,7 +252,7 @@ class Functional():
         if top_db != None:
             top_log = top_db/20
         else:
-            floor = -10
+            floor = -8
 
         for filename in tqdm(os.listdir(input_path)):
             if filename.endswith('.wav'):
@@ -375,13 +380,13 @@ class Functional():
             if(end_time > total_n_frames):
                 # Pad if all waveforms need to be same time or if waveform is 
                 # not long enough for FFT
-                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=split_start)
+                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=round(split_start))
                 if(end_time < self.n_fft or pad_short):
                     wav = self.pad(wav)
             # Split waveform fits in max_time, return waveform starting at 
             # time split_start with length max_time
             else:
-                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=split_start, num_frames=self.max_time)
+                wav, wav_sample_rate = torchaudio.load(wav_path, frame_offset=round(split_start), num_frames=self.max_time)
 
         # Resample if not expected sample rate
         if(wav_sample_rate != sample_rate):
@@ -392,7 +397,7 @@ class Functional():
         return wav
 
     # Return waveform 
-    def process_wav(self, path, fileinfo, sample_rate, pad_short, 
+    def process_wav(self, path, fileinfo, sample_rate, pad_short=False, 
                     is_input=True):
         # Load waveform
         filename = fileinfo[0]
@@ -410,7 +415,7 @@ class Functional():
     
     # Return input and label waveforms
     def process_wavs(self, input_path, label_path, fileinfo, sample_rate, 
-                     pad_short):
+                     pad_short=False):
         # Load waveforms
         filename = fileinfo[0]
         input_wav_path = input_path + filename
@@ -441,4 +446,13 @@ class Functional():
         torchaudio.save(output_path, out, sample_rate)
         if verbose:
             print(f"Saved \"{output_path}\"")
-
+    
+    # Copied from https://discuss.pytorch.org/t/how-do-i-check-the-number-of-parameters-of-a-model/4325/7
+    def get_n_params(model):
+        pp=0
+        for p in list(model.parameters()):
+            nn=1
+            for s in list(p.size()):
+                nn = nn*s
+            pp += nn
+        return pp
