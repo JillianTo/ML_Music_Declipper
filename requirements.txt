@@ -1,4 +1,5 @@
 aim
+auraloss
 autoclip
 bs-roformer
 torch

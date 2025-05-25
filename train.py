@@ -7,6 +7,7 @@ from autoclip.torch import QuantileClip
 import datetime
 import random
 import string
+import math
 
 from audiodataset import AudioDataset
 from functional import Functional
@@ -73,11 +74,9 @@ def main(rank, world_size):
     preload_train_info_path = hparams["preload_train_info_path"]
     n_layers = hparams["n_layers"]
     n_heads = hparams["n_heads"]
+    loss_n_ffts = hparams["loss_n_ffts"]
     n_fft = hparams["n_fft"]
     hop_length = hparams["hop_length"]
-    loss_n_ffts = hparams["loss_n_ffts"]
-    n_mels = hparams["n_mels"]
-    top_db = hparams["top_db"]
     sch_state = hparams["scheduler_state"]
     factors = hparams["scheduler_factors"]
     patiences = hparams["scheduler_patiences"]
@@ -88,6 +87,8 @@ def main(rank, world_size):
     use_amp = hparams["use_amp"]
     grad_accum = hparams["grad_accum"]
     ext_model = hparams["ext_model"]
+    overwrite_loss = hparams["overwrite_loss"]
+    ext_dim = hparams["ext_dim"]
 
     # Determine if we should start first epoch at a presaved point
     resume = (world_size != None and preload_weights_path != None 
@@ -135,14 +136,16 @@ def main(rank, world_size):
     # Add inputs and labels to training dataset
     funct = Functional(max_time=max_time, device=rank, n_fft=n_fft, 
                        hop_length=hop_length, 
-                       augmentation_lbls=augmentation_lbls)
+                       augmentation_lbls=augmentation_lbls, 
+                       loss_n_ffts=loss_n_ffts, 
+                       loss_n_mels=hparams["loss_n_mels"], sample_rate=sample_rate)
 
     train_data = AudioDataset(funct, input_path, train_filelist_path,
                               lbl_path=train_label_path, 
                               sample_rate=sample_rate, 
                               short_thres=short_thres,
                               overlap_factor=overlap_factor,
-                              rtn_input_wav=not resume,
+                              rtn_input_wav=(not resume or start_idx != None),
                               rtn_lbl_wav=batch_size>1)
     print(f"Added {len(train_data)} file pairs to training data")
 
@@ -233,7 +236,7 @@ def main(rank, world_size):
            sys.exit(f"No default band-split parameter in BS-RoFormer for FFT "
                     f"size that is not a multiple of 1024, force exiting") 
 
-        model = BSRoformer(dim=384, depth=n_layers, stereo=True, 
+        model = BSRoformer(dim=ext_dim, depth=n_layers, stereo=True, 
                            time_transformer_depth=1, freq_transformer_depth=1,
                            freqs_per_bands=freqs_per_bands, heads=n_heads,
                            dim_freqs_in=n_fft/2+1, stft_n_fft=n_fft, 
@@ -241,9 +244,10 @@ def main(rank, world_size):
                            multi_stft_resolutions_window_sizes=loss_n_ffts)
         model_str = f"Using BS-RoFormer with "
     elif ext_model == 'mel_roformer':
-        model = MelBandRoformer(dim=128, depth=n_layers, stereo=True, 
+        model = MelBandRoformer(dim=ext_dim, depth=n_layers, stereo=True, 
                                 time_transformer_depth=1, 
-                                freq_transformer_depth=1, num_bands=64, 
+                                freq_transformer_depth=1, 
+                                num_bands=hparams["ext_n_mels"], 
                                 dim_freqs_in=n_fft/2+1, 
                                 sample_rate=sample_rate, stft_n_fft=n_fft, 
                                 stft_hop_length=hop_length, 
@@ -260,10 +264,10 @@ def main(rank, world_size):
                              'normalized': False }
         model_str = f"Using SCNet with "
     else:
-        model = Model(n_fft=n_fft, hop_length=hop_length, top_db=top_db, 
+        model = Model(n_fft=n_fft, hop_length=hop_length, 
                       first_out_channels=hparams["first_out_channels"], 
                       bn_layers=n_layers, nhead=n_heads, 
-                      mean=mean, std=std, lstm_dropout=0.2, activation='identity')
+                      mean=mean, std=std, lstm_dropout=0.2, log_scalar=1, activation=hparams["activation"])
         if n_heads != None:
             model_str = f"Using Transformer Encoder with "
         else:
@@ -291,6 +295,7 @@ def main(rank, world_size):
 
     # Initialize optimizer
     optimizer = optim.AdamW(model.parameters(), lr=learning_rate)
+
     # If enabled, add AutoClip to optimizer
     if autoclip:
         optimizer = QuantileClip.as_optimizer(optimizer=optimizer, 
@@ -407,7 +412,7 @@ def main(rank, world_size):
         torch.cuda.empty_cache()
 
         # Check if validation should be run first
-        if(not (epoch < 1 and val_first)):
+        if(not val_first):
             # If using multi-GPU, set epoch in training data sampler
             if(world_size != None):
                 train_sampler.set_epoch(epoch)
@@ -432,12 +437,26 @@ def main(rank, world_size):
                                         enabled=use_amp, dtype=autocast_dtype):
                         comp_wav = comp_wav.to(rank)
                         if ext_model == 'roformer'or ext_model == 'mel_roformer':
-                            # Get target waveform
-                            uncomp_wav = getTgt(batch_size, fileinfo, funct, 
-                                                train_label_path)
-                            uncomp_wav = uncomp_wav.to(rank)
-                            # Generate prediction and calculate loss
-                            loss = model(comp_wav, target=uncomp_wav)
+                            if overwrite_loss:
+                                # Generate predition
+                                comp_wav = model(comp_wav)
+            
+                                # Get target waveform
+                                uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                                    train_label_path)
+                                uncomp_wav = uncomp_wav.to(rank)
+
+                                # Calculate loss
+                                loss = funct.calc_loss(comp_wav, uncomp_wav)
+
+                            # Use loss function from RoFormer paper
+                            else:
+                                # Get target waveform
+                                uncomp_wav = getTgt(batch_size, fileinfo, funct, 
+                                                    train_label_path)
+                                uncomp_wav = uncomp_wav.to(rank)
+                                # Generate prediction and calculate loss
+                                loss = model(comp_wav, target=uncomp_wav)
                         else:
                             # Generate predition
                             comp_wav = model(comp_wav)
@@ -446,31 +465,14 @@ def main(rank, world_size):
                             uncomp_wav = getTgt(batch_size, fileinfo, funct, 
                                                 train_label_path)
                             uncomp_wav = uncomp_wav.to(rank)
-                            
-                            # Calculate loss
-                            if ext_model == 'scnet':
+                           
+                            # Use loss function from SCNet paper 
+                            if ext_model == 'scnet' and not overwrite_loss:
                                 loss = spec_rmse_loss(comp_wav, uncomp_wav, loss_stft_config)
                             else:
-                                loss = Functional.calc_loss(comp_wav, 
-                                                            uncomp_wav, 
-                                                            sample_rate, 
-                                                            n_ffts=loss_n_ffts, 
-                                                            n_mels=n_mels, 
-                                                            top_db=top_db,
-                                                            scalar=4)
-
+                                loss = funct.calc_loss(comp_wav, uncomp_wav)
                     # Average loss across gradient accumulation batch
                     loss = loss / grad_accum
-
-                    # Force stop if loss is nan
-                    if(loss != loss):
-                        sys.exit(f"Training loss is {loss} during \""
-                                 f"{fileinfo[0][0]}\", force exiting")
-
-                    # Force stop if loss is inf
-                    if(torch.isinf(loss)):
-                        sys.exit(f"Training loss is {loss} during \""
-                                 f"{fileinfo[0][0]}\", force exiting")
 
                     # Backward pass: compute the gradient of the loss with respect
                     # to model parameters
@@ -491,8 +493,19 @@ def main(rank, world_size):
                         # PyTorch
                         optimizer.zero_grad(set_to_none=True)
 
+                    # Force stop if loss is nan 
+                    loss_item = loss.item()
+                    if(loss_item != loss_item):
+                        sys.exit(f"Training loss is {loss} during \""
+                                 f"{fileinfo[0][0]}\", force exiting")
+
+                    # Force stop if loss is inf
+                    if(math.isinf(loss_item)):
+                        sys.exit(f"Training loss is {loss} during \""
+                                 f"{fileinfo[0][0]}\", force exiting")
+
                     # Add loss to total
-                    loss_item = loss.item() * grad_accum
+                    loss_item = loss_item * grad_accum
                     tot_loss += loss_item
 
                     # Calculate average loss so far
@@ -531,7 +544,7 @@ def main(rank, world_size):
             if world_size == None or rank == 0:
                 run.track(avg_loss, name='avg_loss', step=epoch+1, 
                           epoch=epoch+1, context={"subset":f"train"})
-        
+
         # Clear CUDA cache
         torch.cuda.empty_cache()
 
@@ -542,9 +555,12 @@ def main(rank, world_size):
 
         # Save current model, optimizer, and scheduler states after finishing 
         # training epoch
-        if((not (val_first and epoch < 1)) and (world_size == None or rank == 0)):
+        if((not val_first) and (world_size == None or rank == 0)):
             save_states(epoch)
 
+        # Unset val_first
+        val_first = False
+        
         # Set model to validation state
         model.eval()
         # Don't update gradients during validation
@@ -581,13 +597,7 @@ def main(rank, world_size):
                         if ext_model == 'scnet':
                             loss = spec_rmse_loss(comp_wav, uncomp_wav, loss_stft_config)
                         else:
-                            loss = Functional.calc_loss(comp_wav, 
-                                                        uncomp_wav, 
-                                                        sample_rate, 
-                                                        n_ffts=loss_n_ffts, 
-                                                        n_mels=n_mels, 
-                                                        top_db=top_db,
-                                                        scaalar=4)
+                            loss = funct.calc_loss(comp_wav, uncomp_wav) 
 
                 # Add loss to total
                 loss_item = loss.item()

@@ -1,6 +1,7 @@
 import os
 import pickle
 from tqdm import tqdm
+import auraloss
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
@@ -10,21 +11,53 @@ import torchaudio.transforms as T
 class Functional():
 
     def __init__(self, max_time=None, device=None, n_fft=None, hop_length=None, 
-                 augmentation_lbls=None):
+                 augmentation_lbls=None, loss_n_ffts=None, loss_n_mels=None, 
+                 sample_rate=None):
         self.max_time = max_time
         self.device = device
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.augmentation_lbls = augmentation_lbls
+        
+        if loss_n_ffts != None:
+            self.mrstft = auraloss.freq.MultiResolutionSTFTLoss(
+                                            fft_sizes=loss_n_ffts,
+                                            hop_sizes=[n_fft//8 for n_fft in 
+                                                       loss_n_ffts],
+                                            win_lengths=loss_n_ffts,
+                                            sample_rate=sample_rate,
+                                            perceptual_weighting=True,
+                                            scale=None)
+            if loss_n_mels != None:
+                if type(loss_n_mels) is int:
+                    self.diff_n_mels = False
+                    self.mel_mrstft = auraloss.freq.MultiResolutionSTFTLoss(
+                                                    fft_sizes=loss_n_ffts,
+                                                    hop_sizes=[n_fft//8 for n_fft in 
+                                                               loss_n_ffts],
+                                                    win_lengths=loss_n_ffts,
+                                                    sample_rate=sample_rate,
+                                                    perceptual_weighting=False,
+                                                    scale='mel',
+                                                    n_bins=loss_n_mels)
+                else:
+                    self.diff_n_mels = True
+                    self.mel_mrstft = []
+                    self.num_fft_losses = len(loss_n_ffts)
+                    for i in range(self.num_fft_losses):
+                        loss_n_fft = loss_n_ffts[i]
+                        self.mel_mrstft.append(auraloss.freq.STFTLoss(
+                                                        fft_size=loss_n_fft,
+                                                        hop_size=loss_n_fft//8,
+                                                        win_length=loss_n_fft,
+                                                        sample_rate=sample_rate,
+                                                        perceptual_weighting=False,
+                                                        scale='mel', 
+                                                        n_bins=loss_n_mels[i]))
 
     def mean(tensor):
         return torch.sum(tensor)/torch.numel(tensor)
     
-    def upsample(tensor, time):
-        upsampler = nn.Upsample(time)
-        upsampler = upsampler.to(tensor.device)
-        return upsampler(tensor)
-
     def resample(tensor, old_sample_rate, new_sample_rate):
         resampler = T.Resample(old_sample_rate, new_sample_rate, dtype=
                                tensor.dtype)
@@ -34,9 +67,9 @@ class Functional():
     def wav_to_spec_db(tensor, n_fft, hop_length, top_db=None):
         return Functional.amp_to_db(Functional.wav_to_spec(tensor, n_fft, hop_length, amin), top_db)  
     
-    def wav_to_spec(tensor, n_fft, hop_length):
+    def wav_to_spec(tensor, n_fft, hop_length, power=1):
         mag_spec = T.Spectrogram(n_fft=n_fft, hop_length=hop_length, 
-                                 power=1)
+                                 power=power)
         mag_spec = mag_spec.to(tensor.device)
         return mag_spec(tensor)
     
@@ -51,134 +84,44 @@ class Functional():
         amp_to_db_tf = T.AmplitudeToDB("amplitude", top_db=top_db)
         amp_to_db_tf = amp_to_db_tf.to(tensor.device)
         return amp_to_db_tf(tensor) 
-    
-    # pred and tgt should be magnitude spectrograms in linear amplitude scale
-    def spec_loss(pred, tgt, scalar, top_db=None, min_log=-8):
-            # Clamp inputs
-            min_mag = 10^min_log
-            pred_clamp = torch.clamp(pred, min=min_mag)
-            tgt_clamp = torch.clamp(tgt, min=min_mag)
-        
-            # Calculate spectral convergence 
-            loss = scalar*(torch.linalg.norm(torch.sub(tgt_clamp, pred_clamp))/torch.linalg.norm(tgt_clamp))
-
-            # Convert spectrograms to log scale
-            if scalar != 20:
-                pred_log = scalar*torch.clamp(torch.log10(pred), min=min_log)
-                tgt_log = scalar*torch.clamp(torch.log10(tgt), min=min_log)
-            else:
-                pred_log = Functional.amp_to_db(pred, top_db)
-                tgt_log = Functional.amp_to_db(tgt, top_db)
-
-            # Calculate L1 loss for dB scale spectrogram
-            l1_loss = F.l1_loss(pred_log, tgt_log)
+   
+    def mel_spec_loss(self, pred, tgt):
+        if self.diff_n_mels:
+            loss = 0
+            for mel_stft in self.mel_mrstft:
+                loss = loss + mel_stft(pred, tgt)
+            return torch.div(loss, self.num_fft_losses)
+        else:
+            return self.mel_mrstft(pred, tgt)
             
-            # Add L1 loss to spectral convergence loss
-            loss = loss + l1_loss
-            
-            return loss
-            
+ 
+    def calc_loss(self, pred, tgt, use_diff_loss=False):
 
-    def calc_loss(pred, tgt, sample_rate, n_ffts, n_mels=None, 
-                  hop_lengths=None, top_db=None, scalar=1, diff_loss=False):
-        # Initialize loss as 0
-        loss = 0
+        # Calculate stereo loss
+        loss = self.mrstft(pred, tgt)
 
-        # Calculate loss for all defined FFT sizes
-        for i in range(len(n_ffts)):
-            # If not defined, set hop length to 1/8th of FFT size
-            if hop_lengths == None:
-                hop_length = n_ffts[i]>>3
-            else:
-                hop_length = hop_lengths[i]
-            
-            # Convert stereo waveform to spectrogram
-            pred_spec = Functional.wav_to_spec(pred, n_ffts[i], hop_length)
-            tgt_spec = Functional.wav_to_spec(tgt, n_ffts[i], hop_length)
+        # Combine stereo waveforms to mono
+        pred_mono = pred[:,0,:]+pred[:,1,:]
+        pred_mono = pred_mono.unsqueeze(1)
+        tgt_mono = tgt[:,0,:]+tgt[:,1,:]
+        tgt_mono = tgt_mono.unsqueeze(1)
 
-            # Calculate loss for stereo spectrogram
-            lr_loss = Functional.spec_loss(pred_spec, tgt_spec, scalar, 
-                                           top_db=top_db)
+        # Calculate mono mel loss
+        sum_loss = self.mel_spec_loss(pred_mono, tgt_mono)
 
-            # Calculate losses for stereo mel spectrogram
-            if n_mels != None:
-                # Convert stereo waveform to mel spectrogram
-                pred_spec = Functional.wav_to_mel(pred, sample_rate, n_ffts[i], 
-                                                  hop_length, n_mels[i])
-                tgt_spec = Functional.wav_to_mel(tgt, sample_rate, n_ffts[i], 
-                                                 hop_length, n_mels[i])
-                
-                # Calculate loss for stereo mel spectrogram
-                lr_loss = lr_loss + Functional.spec_loss(pred_spec, tgt_spec,
-                                                         scalar, 
-                                                         top_db=top_db)
+        # Calculate losses for difference spectrogram 
+        if use_diff_loss:
+            # Subtract right channel from left channel
+            pred_mono = pred[:,0,:]-pred[:,1,:]
+            tgt_mono = tgt[:,0,:]-tgt[:,1,:]
 
-            # Combine stereo waveforms to mono
-            pred_mono = torch.div(pred[:,0,:]+pred[:,1,:], 2)
-            tgt_mono = torch.div(tgt[:,0,:]+tgt[:,1,:], 2)
+            diff_loss = self.mrstft(pred_mono, tgt_mono)
 
-            # Convert mono waveform to spectrogram
-            pred_spec = Functional.wav_to_spec(pred_mono, n_ffts[i], 
-                                               hop_length)
-            tgt_spec = Functional.wav_to_spec(tgt_mono, n_ffts[i], 
-                                              hop_length)
-
-            # Calculate spectral convergence for difference spectrogram
-            sum_loss = Functional.spec_loss(pred_spec, tgt_spec, scalar, 
-                                            top_db=top_db)
-
-            # Calculate losses for mono mel spectrogram
-            if n_mels != None:
-                # Convert mono waveform to mel spectrogram
-                pred_spec = Functional.wav_to_mel(pred_mono, sample_rate, 
-                                                     n_ffts[i], hop_length, 
-                                                     n_mels[i])
-                tgt_spec = Functional.wav_to_mel(tgt_mono, sample_rate, 
-                                                 n_ffts[i], hop_length, 
-                                                 n_mels[i])
-
-                # Calculate loss for mono mel spectrogram
-                sum_loss = sum_loss + Functional.spec_loss(pred_spec, tgt_spec,
-                                                           scalar, 
-                                                           top_db=top_db)
-
-            # Calculate losses for difference spectrogram 
-            if diff_loss:
-                # Subtract right channel from left channel
-                pred_mono = pred[:,0,:]-pred[:,1,:]
-                tgt_mono = tgt[:,0,:]-tgt[:,1,:]
-
-                # Convert difference waveform to spectrogram
-                pred_spec = Functional.wav_to_spec(pred_mono, n_ffts[i], 
-                                                   hop_length)
-                tgt_spec = Functional.wav_to_spec(tgt_mono, n_ffts[i], 
-                                                  hop_length)
-
-                # Calculate spectral convergence for difference spectrogram
-                diff_loss = Functional.spec_loss(pred_spec, tgt_spec, 
-                                                 scalar, top_db=top_db)
-
-                # Calculate losses for difference mel spectrogram
-                if n_mels != None:
-                    # Convert difference waveform to mel spectrogram
-                    pred_spec = Functional.wav_to_mel(pred_mono, sample_rate, 
-                                                      n_ffts[i], hop_length, 
-                                                      n_mels[i])
-                    tgt_spec = Functional.wav_to_mel(tgt_mono, sample_rate, 
-                                                     n_ffts[i], hop_length, 
-                                                     n_mels[i])
-
-                    # Calculate loss for difference mel spectrogram
-                    diff_loss = diff_loss + Functional.spec_loss(pred_spec, 
-                                                                 tgt_spec, 
-                                                                 scalar, 
-                                                                 top_db=top_db)
-
-                # Add loss term for this FFT size to total 
-                loss = loss + (1/len(n_ffts))*(lr_loss+torch.div(sum_loss, 2)+torch.div(diff_loss, 2))
-            else:
-                # Add loss term for this FFT size to total 
-                loss = loss + (1/len(n_ffts))*(lr_loss+sum_loss)
+            # Add loss term for this FFT size to total 
+            loss = loss + sum_loss + diff_loss
+        else:
+            # Add loss term for this FFT size to total 
+            loss = loss + sum_loss
 
         # Return loss term averaged across all defined FFT sizes
         return loss
@@ -212,7 +155,9 @@ class Functional():
 
     def mag_phase_to_wav(mag, phase, n_fft, hop_length):
         # Upsample magnitude to match phase shape
-        x = Functional.upsample(mag, [phase.shape[2], phase.shape[3]])
+        mag_upsample = nn.Upsample([phase.shape[2], phase.shape[3]])
+        mag_upsample = mag_upsample.to(mag.device)
+        x = mag_upsample(mag)
         # Combine magnitude and phase
         x = torch.polar(x, phase)
         # Invert spectrogram

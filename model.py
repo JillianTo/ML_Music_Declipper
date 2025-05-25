@@ -9,25 +9,25 @@ import torchaudio.transforms as T
 from functional import Functional
 
 class Model(nn.Module):
-    def __init__(self, n_fft, hop_length, top_db, first_out_channels, 
-                 bn_layers, in_channels=2, first_kernel_size=(3,3), 
-                 kernel_size=(3,3), stride=(1,1), activation='elu', 
-                 cnn_layers=4, norm_groups=None, nhead=8, lstm_dropout=0.5, 
-                 mean=None, std=None):
+    def __init__(self, n_fft, hop_length, first_out_channels, bn_layers, 
+                 in_channels=2, first_kernel_size=(3,3), kernel_size=(3,3), 
+                 stride=(1,1), activation='elu', cnn_layers=4, 
+                 norm_groups=None, nhead=8, lstm_dropout=0.0, mean=None, 
+                 std=None, log_scalar=1):
         super(Model, self).__init__(),
 
         self.n_fft = n_fft
         self.hop_length = hop_length
         self.cnn_layers = cnn_layers
         self.nhead = nhead
-        self.mean = mean
-        self.std = std
+        self.log_scalar = log_scalar
 
-        # Determine log range if top_db is provided
-        if top_db != None:
-            self.top_log = top_db/20
+        if mean != None:
+            self.mean = mean*log_scalar
+            self.std = std*log_scalar
         else:
-            self.top_log = top_db
+            self.mean = mean
+            self.std = std
 
         # Determine which activation function to use
         if activation == 'relu':
@@ -43,20 +43,20 @@ class Model(nn.Module):
         elif activation == 'identity':
             act = nn.Identity()
 
-        # Encoder layers
+        # Initialize encoder with first layer that accepts input channels
         self.encs = nn.ModuleList([nn.Sequential(
                                     nn.Conv2d(in_channels=in_channels, 
                                               out_channels=first_out_channels, 
                                               kernel_size=first_kernel_size, 
                                               stride=stride, padding=1),
-                                    #nn.Conv2d(in_channels=first_out_channels, 
-                                    #          out_channels=first_out_channels, 
-                                    #          kernel_size=first_kernel_size, 
-                                    #          stride=stride, padding=1),
+                                    nn.Conv2d(in_channels=first_out_channels, 
+                                              out_channels=first_out_channels, 
+                                              kernel_size=first_kernel_size, 
+                                              stride=stride, padding=1),
                                     act,
                                  )])
         for i in range(1, cnn_layers):
-            self.encs.append(nn.Sequential())
+            self.encs.append(nn.Sequential(nn.MaxPool2d((2,2), stride=2)))
             self.encs[i].append(nn.Conv2d(in_channels=first_out_channels<<i-1, 
                                           out_channels=first_out_channels<<i, 
                                           kernel_size=kernel_size, 
@@ -65,14 +65,11 @@ class Model(nn.Module):
                 self.encs[i].append(nn.GroupNorm(norm_groups, 
                                                  first_out_channels<<i))
 
-                self.encs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
-                                              out_channels=first_out_channels<<i, 
-                                              kernel_size=kernel_size, 
-                                              stride=stride, padding=1))
+            self.encs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
+                                          out_channels=first_out_channels<<i, 
+                                          kernel_size=kernel_size, 
+                                          stride=stride, padding=1))
             self.encs[i].append(act)
-
-        # Pool layer
-        self.pool = nn.MaxPool2d((2,2), stride=2)
 
         # Bottleneck layer
         # Set transformer channels to output channels of last used encoder 
@@ -80,11 +77,20 @@ class Model(nn.Module):
         bn_channels = first_out_channels<<cnn_layers
 
         # Last CNN layer before bottleneck
-        self.enc_bn = nn.Sequential(
-            nn.Conv2d(in_channels=bn_channels>>1, 
-                      out_channels=bn_channels, 
-                      kernel_size=kernel_size, stride=stride, padding=1),
-        )
+        self.enc_bn = nn.Sequential(nn.MaxPool2d((2,2), stride=2),
+                                    nn.Conv2d(in_channels=bn_channels>>1, 
+                                              out_channels=bn_channels, 
+                                              kernel_size=kernel_size, 
+                                              stride=stride, padding=1))
+
+        # If using identity activations, add an activation before bottleneck
+        if activation == 'identity':
+            # If using transformer encoder, add ReLU
+            if nhead != None:
+                self.enc_bn.append(nn.ReLU())
+            # If using LSTM, add Tanh
+            else:
+                self.enc_bn.append(nn.Tanh())
         
         # Start bottleneck with layer normalization
         self.bn = nn.Sequential(nn.LayerNorm(bn_channels))
@@ -111,16 +117,16 @@ class Model(nn.Module):
                       kernel_size=(2,2), stride=stride, padding=1),
         )
 
-        # Decoder layers
+        # Initialize decoder with last layer that outputs input channels
         self.decs = nn.ModuleList([nn.Sequential(
                                     nn.Conv2d(in_channels=first_out_channels<<1, 
                                               out_channels=first_out_channels, 
                                               kernel_size=kernel_size, 
                                               stride=stride, padding=1),
-                                    #nn.Conv2d(in_channels=first_out_channels, 
-                                    #          out_channels=first_out_channels, 
-                                    #          kernel_size=first_kernel_size, 
-                                    #          stride=stride, padding=1),
+                                    nn.Conv2d(in_channels=first_out_channels, 
+                                              out_channels=first_out_channels, 
+                                              kernel_size=first_kernel_size, 
+                                              stride=stride, padding=1),
                                     act,
                                     nn.Conv2d(in_channels=first_out_channels, 
                                               out_channels=in_channels, 
@@ -140,10 +146,10 @@ class Model(nn.Module):
                                           stride=stride, padding=1))
             if norm_groups != None:
                 nn.GroupNorm(norm_groups, first_out_channels<<i),
-                self.decs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
-                                              out_channels=first_out_channels<<i, 
-                                              kernel_size=kernel_size, 
-                                              stride=stride, padding=1))
+            self.decs[i].append(nn.Conv2d(in_channels=first_out_channels<<i, 
+                                          out_channels=first_out_channels<<i, 
+                                          kernel_size=kernel_size, 
+                                          stride=stride, padding=1))
             self.decs[i].append(act)
             
             # Upsample section
@@ -166,30 +172,22 @@ class Model(nn.Module):
 
         # Convert magnitude from linear to log10 scale
         x = torch.log10(x)
-
-        # Clamp minimum value
-        if self.top_log != None:
-            floor = torch.max(x)-self.top_log
-        else:
-            floor = -8
-        x = torch.clamp(x, min=floor)
+        x = torch.clamp(x, min=-8)
+        x = x*self.log_scalar
 
         # Standardize magnitude
         if self.mean != None:
             x = (x-self.mean)/self.std
         
-        # Flip sign
-        #x = -x
-
         # Apply first encoder layer
         skips = [self.encs[0](x)]
         
         # Apply encoder layers after first
         for i in range(1, self.cnn_layers):
-            skips.append(self.encs[i](self.pool(skips[i-1])))
+            skips.append(self.encs[i](skips[i-1]))
 
         # Apply final encoder layer before bottleneck
-        x = self.enc_bn(self.pool(skips[self.cnn_layers-1]))
+        x = self.enc_bn(skips[self.cnn_layers-1])
 
         # Flatten encoder output and rearrange to use with transformer or LSTM
         ch_dim = x.size(1)
@@ -228,19 +226,13 @@ class Model(nn.Module):
             x = torch.cat((x, curr_skip), dim=1)
             x = self.decs[curr_idx](x)
 
-        # Flip sign
-        #x = -x
-
         # Unnormalize magnitude
         if self.mean != None:
             x = (x*self.std)+self.mean
 
-        # Clamp minimum value
-        if self.top_log != None:
-            floor = torch.max(x)-self.top_log
-        x = torch.clamp(x, min=floor)
-
         # Convert magnitude back to linear amplitude
+        x = x/self.log_scalar
+        x = torch.clamp(x, min=-8)
         x = torch.pow(10, x)
         
         # Convert spectrogram to waveform
@@ -248,4 +240,6 @@ class Model(nn.Module):
 
         # Set output to same time length as original input
         x = upsample(x)
-        return torch.clamp(x, min=-1, max=1)
+
+        # Return prediction
+        return x

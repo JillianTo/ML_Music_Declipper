@@ -28,7 +28,7 @@ test_fade = False
 norm_thres = 0.01
 eq = False # Does not work well 
 save_noeq_wav = True
-gpu_idx = 1
+gpu_idx = 0
 
 # Model hyperparameters
 hparams = Functional.get_hparams(sys.argv)
@@ -71,8 +71,8 @@ dataset = AudioDataset(funct, path, None, sample_rate=sample_rate, pad_short=Fal
 
 # Initialize model with pre-trained weights
 model = Model(mean=mean, std=std, n_fft=n_fft, hop_length=hop_length, 
-              top_db=top_db, first_out_channels=hparams["first_out_channels"], 
-              bn_layers=hparams["n_layers"], nhead=hparams["n_heads"], activation='identity', lstm_dropout=0)
+              first_out_channels=hparams["first_out_channels"], 
+              bn_layers=hparams["n_layers"], nhead=hparams["n_heads"], activation=hparams['activation'], lstm_dropout=0)
 
 model.to(device)
 model.load_state_dict(torch.load(weights_path, map_location=device))
